@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iPad 狼人殺</title>
+  <style>
+    body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
+    .card { background: #333; padding: 20px; border-radius: 10px; margin: 15px auto; max-width: 400px; }
+    button { background: #e74c3c; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; margin: 5px; }
+    input { padding: 10px; font-size: 16px; border-radius: 5px; border: none; }
+    .hidden { display: none; }
+  </style>
+  
+  <!-- 載入 Firebase 模組 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+    // 填入你的 Firebase 設定參數
+    const firebaseConfig = {
+      apiKey: "AIzaSyB4_tS-4ubsozDX8i_74OueH9dOELyquw4",
+      authDomain: "wolfkill-54199.firebaseapp.com",
+      databaseURL: "https://wolfkill-54199-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "wolfkill-54199",
+      storageBucket: "wolfkill-54199.firebasestorage.app",
+      messagingSenderId: "79536102733",
+      appId: "1:79536102733:web:070fbd11247de252e52b04",
+      measurementId: "G-VVMNC5XD8B"
+     };
+
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    let myPlayerId = "";
+    let myRole = "";
+
+    // 建立/加入房間
+    window.joinGame = function() {
+      const name = document.getElementById('playerName').value;
+      if (!name) return alert("請輸入暱稱");
+      
+      myPlayerId = "p_" + Math.random().toString(36).substr(2, 9);
+      set(ref(db, 'room/players/' + myPlayerId), {
+        name: name,
+        role: "未分配",
+        isAlive: true,
+        potions: { heal: 1, poison: 1 },
+        injections: 2
+      });
+
+      document.getElementById('login-area').classList.add('hidden');
+      document.getElementById('lobby-area').classList.remove('hidden');
+    };
+
+    // 房主按發牌 (洗牌邏輯)
+    window.startGame = function() {
+      const rolesPool = ["狼人", "警察", "平民", "醫生", "女巫", "獵人"];
+      // 洗牌
+      rolesPool.sort(() => Math.random() - 0.5);
+
+      onValue(ref(db, 'room/players'), (snapshot) => {
+        const players = snapshot.val();
+        if (!players) return;
+        
+        let keys = Object.keys(players);
+        keys.forEach((id, index) => {
+          if(rolesPool[index]) {
+            update(ref(db, `room/players/${id}`), { role: rolesPool[index] });
+          }
+        });
+        update(ref(db, 'room'), { phase: 'NIGHT_START' });
+      }, { onlyOnce: true });
+    };
+
+    // 即時監聽資料庫變更
+    onValue(ref(db, 'room'), (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      // 更新玩家清單
+      if (data.players) {
+        let listHtml = "";
+        for (let id in data.players) {
+          listHtml += `<li>${data.players[id].name}</li>`;
+          if (id === myPlayerId) {
+            myRole = data.players[id].role;
+          }
+        }
+        document.getElementById('player-list').innerHTML = listHtml;
+      }
+
+      // 更新階段與卡片身分
+      if (data.phase && data.phase !== 'LOBBY') {
+        document.getElementById('lobby-area').classList.add('hidden');
+        document.getElementById('game-area').classList.remove('hidden');
+        document.getElementById('phase-text').innerText = "當前階段：" + data.phase;
+      }
+    });
+
+    // 查看身份按鈕
+    window.toggleRole = function() {
+      const card = document.getElementById('role-card');
+      if (card.innerText === "點擊翻開卡片") {
+        card.innerText = "你的身分是：" + myRole;
+      } else {
+        card.innerText = "點擊翻開卡片";
+      }
+    };
+  </script>
+</head>
+<body>
+
+  <h1>iPad 網頁版狼人殺</h1>
+
+  <!-- 1. 登入區域 -->
+  <div id="login-area" class="card">
+    <h3>輸入暱稱加入房間</h3>
+    <input type="text" id="playerName" placeholder="例如：玩家 A"><br><br>
+    <button onclick="joinGame()">加入房間</button>
+  </div>
+
+  <!-- 2. 等待室區域 -->
+  <div id="lobby-area" class="card hidden">
+    <h3>玩家大廳</h3>
+    <ul id="player-list" style="list-style:none; padding:0;"></ul>
+    <button onclick="startGame()">發牌並開始遊戲 (房主按)</button>
+  </div>
+
+  <!-- 3. 遊戲進行區域 -->
+  <div id="game-area" class="card hidden">
+    <h2 id="phase-text">等待遊戲開始...</h2>
+    
+    <div class="card" id="role-card" onclick="toggleRole()" style="cursor:pointer; background:#555;">
+      點擊翻開卡片
+    </div>
+  </div>
+
+</body>
+</html>
