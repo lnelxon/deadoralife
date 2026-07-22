@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>dead or alife</title>
+  <title>iPad 狼人殺</title>
   <style>
     body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; margin: 0; }
     .card { background: #333; padding: 20px; border-radius: 10px; margin: 15px auto; max-width: 450px; position: relative; }
@@ -148,13 +148,13 @@
       if (!votesObj) return null;
       
       let votes = Object.values(votesObj);
+      // 必須所有活著的該職位玩家都投過票，且投向同一個人
       if (votes.length === aliveRolePlayers.length && votes.every(v => v === votes[0])) {
         return votes[0];
       }
       return null;
     }
 
-    // 檢查是否有配置特定角色
     function hasRoleInGame(roomData, roleName) {
       if (roomData.roleCounts && roomData.roleCounts[roleName] > 0) return true;
       return false;
@@ -302,8 +302,9 @@
               });
             }
             let wolfIcons = '🐺'.repeat(voteCount);
+            // 點擊按鈕直接寫入投票
             html += `<button class="target-btn ${isMyTarget ? 'btn-danger' : 'btn-secondary'}" onclick="voteAction('wolfVotes', '${p.id}')">
-                      ${p.name} ${wolfIcons}
+                      ${p.name} ${isMyTarget ? '🎯 (你選他)' : ''} ${wolfIcons}
                      </button>`;
           });
         } else {
@@ -316,6 +317,7 @@
           let aliveWolves = activePlayers.filter(p => p.role === '狼人' && p.isAlive);
           let targetToKill = checkAgreedTarget(aliveWolves, roomData.wolfVotes);
 
+          // 只要有達成共識，或者房主想強制推進（若只有一個狼人或大家投好），房主即可按下一步
           if (targetToKill) {
             btnHostNext.innerText = "下一步";
             btnHostNext.disabled = false;
@@ -323,7 +325,6 @@
               let updates = {};
               if (targetToKill !== 'NO_ALIVE') updates[`rooms/${currentRoomId}/killedByWolf`] = targetToKill;
               
-              // 自動判斷下一個階段：檢查是否有警察，沒有就跳過
               if (hasRoleInGame(roomData, '警察')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_POLICE';
               } else if (hasRoleInGame(roomData, '醫生')) {
@@ -331,8 +332,8 @@
               } else if (hasRoleInGame(roomData, '女巫')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
               } else {
-                // 如果都沒有，直接夜間結算
                 calculateNightEndViaData(roomData, updates);
+                update(ref(db), updates);
                 return;
               }
               update(ref(db), updates);
@@ -374,7 +375,7 @@
               }
               let icons = '👁️'.repeat(voteCount);
               html += `<button class="target-btn ${isMyTarget ? 'btn-success' : 'btn-secondary'}" onclick="voteAction('policeVotes', '${p.id}')">
-                        ${p.name} ${icons}
+                        ${p.name} ${isMyTarget ? '🎯 (你選他)' : ''} ${icons}
                        </button>`;
             });
 
@@ -403,6 +404,7 @@
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
               } else {
                 calculateNightEndViaData(roomData, updates);
+                update(ref(db), updates);
                 return;
               }
               update(ref(db), updates);
@@ -453,6 +455,7 @@
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
               } else {
                 calculateNightEndViaData(roomData, updates);
+                update(ref(db), updates);
                 return;
               }
               update(ref(db), updates);
@@ -567,7 +570,7 @@
             }
             let icons = '🗳️'.repeat(voteCount);
             html += `<button class="target-btn ${isMyTarget ? 'btn-danger' : 'btn-secondary'}" onclick="voteAction('dayVotes', '${p.id}')">
-                      ${p.name} ${icons}
+                      ${p.name} ${isMyTarget ? '🎯 (你選他)' : ''} ${icons}
                      </button>`;
           });
         }
@@ -589,7 +592,6 @@
             if (!roomData.dayResultText) {
               calculateDayVoteResult(roomData);
             } else {
-              // 投票結算後進入下一個夜晚
               update(ref(db, `rooms/${currentRoomId}`), { 
                 phase: 'NIGHT_WOLF', 
                 wolfVotes: null, 
@@ -608,7 +610,6 @@
       }
     }
 
-    // 計算夜晚死亡名單 (輔助函式)
     function calculateNightEndViaData(roomData, updates) {
       let deaths = [];
       let killedByWolf = roomData.killedByWolf;
@@ -616,9 +617,7 @@
       let witchAct = roomData.witchAction;
 
       if (killedByWolf) {
-        // 如果狼殺目標等於醫生救的目標，則免死
         let isSavedByDoctor = (doctorTarget && doctorTarget === killedByWolf);
-        // 如果女巫使用了解藥救了該目標，則免死
         let isSavedByWitch = (witchAct && witchAct.type === 'heal' && witchAct.target === killedByWolf);
 
         if (!isSavedByDoctor && !isSavedByWitch) {
@@ -636,10 +635,9 @@
         updates[`rooms/${currentRoomId}/players/${id}/isAlive`] = false;
       });
       updates[`rooms/${currentRoomId}/lastNightDeaths`] = deaths.length > 0 ? deaths : null;
-      updates[`rooms/${currentRoomId}/phase` ] = 'NIGHT_END';
+      updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_END';
     }
 
-    // 計算白天投票結果：最多票者淘汰；同票或只有一票則無人淘汰
     function calculateDayVoteResult(roomData) {
       if (!roomData.dayVotes) {
         update(ref(db, `rooms/${currentRoomId}/dayResultText`), "大家皆未投票，今日無人出局。");
@@ -667,7 +665,6 @@
       let updates = {};
       let resultText = "";
 
-      // 條件：如果最高票只有 1 票，或者有多人同票（topTargets.length > 1），則無人淘汰
       if (maxVotes <= 1 || topTargets.length > 1) {
         resultText = `最高票數為 ${maxVotes} 票，但由於出現同票或票數不足，今日無人被淘汰！`;
       } else {
@@ -696,6 +693,7 @@
     }
 
     window.voteAction = function(voteNode, targetId) {
+      if (isSpectator) return alert("觀眾無法參與投票！");
       update(ref(db, `rooms/${currentRoomId}/${voteNode}/${myPlayerId}`), targetId);
     };
 
@@ -704,10 +702,12 @@
     };
 
     window.doctorAction = function(targetId) {
+      if (isSpectator) return;
       update(ref(db, `rooms/${currentRoomId}/doctorTarget`), targetId);
     };
 
     window.witchAction = function(type, targetId) {
+      if (isSpectator) return;
       let updates = {};
       updates[`rooms/${currentRoomId}/witchAction`] = { type: type, target: targetId };
       if (type === 'heal') updates[`rooms/${currentRoomId}/witchState/hasHeal`] = false;
