@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iPad 狼人殺</title>
+  <style>
+    body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; margin: 0; }
+    .card { background: #333; padding: 20px; border-radius: 10px; margin: 15px auto; max-width: 450px; position: relative; }
+    button { background: #e74c3c; color: white; border: none; padding: 10px 18px; font-size: 16px; border-radius: 5px; cursor: pointer; margin: 5px; }
+    button:disabled { background: #777; cursor: not-allowed; }
+    .btn-secondary { background: #3498db; }
+    .btn-danger { background: #c0392b; }
+    .btn-success { background: #2ecc71; }
+    input { padding: 10px; font-size: 16px; border-radius: 5px; border: none; margin: 5px; width: 80%; }
+    .hidden { display: none !important; }
+    
+    /* 右上角房主控制列 */
+    #host-controls { position: fixed; top: 15px; right: 15px; z-index: 100; display: flex; gap: 8px; }
+    #host-controls button { font-size: 13px; padding: 6px 12px; }
+
+    /* 角色設定列表樣式 */
+    .role-setting { display: flex; justify-content: space-between; align-items: center; margin: 8px 0; background: #444; padding: 5px 15px; border-radius: 5px; }
+    .btn-counter { background: #3498db; width: 32px; height: 32px; font-weight: bold; border-radius: 50%; padding: 0; }
+    .badge { background: #f39c12; padding: 3px 8px; border-radius: 10px; font-size: 14px; }
+  </style>
+  
+  <!-- 載入 Firebase 模組 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyB4_tS-4ubsozDX8i_74OueH9dOELyquw4",
+      authDomain: "wolfkill-54199.firebaseapp.com",
+      databaseURL: "https://wolfkill-54199-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "wolfkill-54199",
+      storageBucket: "wolfkill-54199.firebasestorage.app",
+      messagingSenderId: "79536102733",
+      appId: "1:79536102733:web:070fbd11247de252e52b04",
+      measurementId: "G-VVMNC5XD8B"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    let currentRoomId = "";
+    let myPlayerId = "";
+    let myRole = "";
+    let isHost = false;
+    let isSpectator = false;
+    let maxPlayersLimit = 6;
+    let currentPlayersCount = 0;
+
+    let roleCounts = { "狼人": 1, "警察": 1, "平民": 1, "醫生": 1, "女巫": 1, "獵人": 1 };
+
+    // 顯示「建立房間」選單
+    window.showCreateRoomMenu = function() {
+      document.getElementById('home-menu').classList.add('hidden');
+      document.getElementById('create-room-form').classList.remove('hidden');
+    };
+
+    // 顯示「加入房間」選單
+    window.showJoinRoomMenu = function() {
+      document.getElementById('home-menu').classList.add('hidden');
+      document.getElementById('join-room-form').classList.remove('hidden');
+    };
+
+    // 返回首頁選單
+    window.showHomeMenu = function() {
+      document.getElementById('create-room-form').classList.add('hidden');
+      document.getElementById('join-room-form').classList.add('hidden');
+      document.getElementById('home-menu').classList.remove('hidden');
+    };
+
+    // 1. 建立房間 (改為 5 位數隨機數字)
+    window.createRoom = function() {
+      const name = document.getElementById('hostName').value;
+      const maxLimit = parseInt(document.getElementById('maxPlayers').value);
+
+      if (!name) return alert("請輸入暱稱");
+      if (!maxLimit || maxLimit < 1) return alert("請輸入有效的玩家人數上限");
+
+      // 產生 5 位數隨機號碼
+      currentRoomId = Math.floor(10000 + Math.random() * 90000).toString();
+      myPlayerId = "p_" + Math.random().toString(36).substr(2, 9);
+      isHost = true;
+      isSpectator = false;
+
+      set(ref(db, 'rooms/' + currentRoomId), {
+        hostId: myPlayerId,
+        maxPlayers: maxLimit,
+        phase: 'LOBBY',
+        wolfTarget: null,
+        players: {
+          [myPlayerId]: { name: name, role: "未分配", isSpectator: false, joinedAt: Date.now() }
+        }
+      });
+
+      listenToRoomData();
+    };
+
+    // 2. 加入房間
+    window.joinRoom = function() {
+      const name = document.getElementById('joinName').value;
+      const roomId = document.getElementById('joinRoomId').value.trim();
+
+      if (!name) return alert("請輸入暱稱");
+      if (!roomId) return alert("請輸入房間代碼");
+
+      onValue(ref(db, 'rooms/' + roomId), (snapshot) => {
+        const roomData = snapshot.val();
+        if (!roomData) return alert("找不到該房間！請確認代碼是否正確。");
+
+        currentRoomId = roomId;
+        myPlayerId = "p_" + Math.random().toString(36).substr(2, 9);
+        isHost = false;
+
+        const activePlayersCount = Object.values(roomData.players || {}).filter(p => !p.isSpectator).length;
+        isSpectator = activePlayersCount >= roomData.maxPlayers;
+
+        set(ref(db, `rooms/${currentRoomId}/players/${myPlayerId}`), {
+          name: name,
+          role: "未分配",
+          isSpectator: isSpectator,
+          joinedAt: Date.now()
+        });
+
+        listenToRoomData();
+      }, { onlyOnce: true });
+    };
+
+    // 切換玩家身分 (觀眾 / 遊玩列)
+    window.switchRole = function(toSpectator) {
+      update(ref(db, `rooms/${currentRoomId}/players/${myPlayerId}`), {
+        isSpectator: toSpectator
+      });
+    };
+
+    // 狼人選擇目標
+    window.wolfSelect = function(targetId) {
+      update(ref(db, 'rooms/' + currentRoomId), { wolfTarget: targetId });
+    };
+
+    // 房主切換遊戲階段
+    window.nextPhase = function(newPhase) {
+      let updates = { phase: newPhase };
+      if (newPhase === 'NIGHT_WOLF') {
+        updates.wolfTarget = null; // 進入夜晚時清空上一輪目標
+      }
+      update(ref(db, 'rooms/' + currentRoomId), updates);
+    };
+
+    // 監聽房間狀態變更
+    function listenToRoomData() {
+      onValue(ref(db, 'rooms/' + currentRoomId), (snapshot) => {
+        const roomData = snapshot.val();
+
+        if (!roomData) {
+          alert("房間已被關閉！將返回首頁。");
+          location.reload();
+          return;
+        }
+
+        maxPlayersLimit = roomData.maxPlayers;
+
+        if (isHost) {
+          document.getElementById('host-controls').classList.remove('hidden');
+        } else {
+          document.getElementById('host-controls').classList.add('hidden');
+        }
+
+        document.getElementById('home-area').classList.add('hidden');
+        document.getElementById('room-info-bar').innerText = `房間代碼：${currentRoomId} (上限 ${maxPlayersLimit} 人)`;
+
+        // 渲染大廳列表
+        if (roomData.players) {
+          let playersListHtml = "";
+          let spectatorsListHtml = "";
+          let activePlayers = [];
+          let spectators = [];
+
+          Object.entries(roomData.players).sort((a, b) => a[1].joinedAt - b[1].joinedAt).forEach(([id, p]) => {
+            if (id === myPlayerId) {
+              myRole = p.role;
+              isSpectator = p.isSpectator;
+            }
+            if (p.isSpectator) spectators.push({ id, ...p });
+            else activePlayers.push({ id, ...p });
+          });
+
+          currentPlayersCount = activePlayers.length;
+
+          // 生成固定數量的座位列表
+          for (let i = 0; i < maxPlayersLimit; i++) {
+            if (i < activePlayers.length) {
+              let p = activePlayers[i];
+              let isMe = (p.id === myPlayerId);
+              let hostIcon = (p.id === roomData.hostId) ? '👑' : '';
+              let actionBtn = (isMe && roomData.phase === 'LOBBY') ? `<button onclick="switchRole(true)" style="padding:4px 8px; font-size:12px; margin-left:10px;">變為觀眾</button>` : '';
+              playersListHtml += `<li style="margin-bottom:10px; font-size:18px; background:#444; padding:8px; border-radius:5px;">${i + 1}. 👤 ${p.name} ${hostIcon} ${actionBtn}</li>`;
+            } else {
+              let canJoin = isSpectator && roomData.phase === 'LOBBY';
+              let actionBtn = canJoin ? `<button onclick="switchRole(false)" class="btn-success" style="padding:4px 8px; font-size:12px; margin-left:10px;">加入遊戲列</button>` : '';
+              playersListHtml += `<li style="margin-bottom:10px; font-size:18px; color:#aaa; background:#333; padding:8px; border-radius:5px; border: 1px dashed #555;">${i + 1}. [空位] ${actionBtn}</li>`;
+            }
+          }
+
+          spectators.forEach(p => {
+            let isMe = (p.id === myPlayerId);
+            let actionBtn = (isMe && currentPlayersCount < maxPlayersLimit && roomData.phase === 'LOBBY') ? `<button onclick="switchRole(false)" class="btn-success" style="padding:2px 5px; font-size:12px; margin-left:5px;">加入遊戲</button>` : '';
+            spectatorsListHtml += `<li>👁️ ${p.name} ${isMe ? '(您)' : ''} ${actionBtn}</li>`;
+          });
+
+          document.getElementById('player-count').innerText = currentPlayersCount;
+          document.getElementById('player-list').innerHTML = playersListHtml;
+          document.getElementById('spectator-list').innerHTML = spectatorsListHtml;
+
+          updateRoleSettingsUI();
+        }
+
+        // 控管遊戲階段顯示
+        if (roomData.phase === 'LOBBY') {
+          document.getElementById('lobby-area').classList.remove('hidden');
+          document.getElementById('game-area').classList.add('hidden');
+        } else {
+          document.getElementById('lobby-area').classList.add('hidden');
+          document.getElementById('game-area').classList.remove('hidden');
+
+          document.getElementById('phase-reveal').classList.add('hidden');
+          document.getElementById('phase-speech').classList.add('hidden');
+          document.getElementById('phase-wolf').classList.add('hidden');
+
+          // 【階段 1】翻牌確認身分
+          if (roomData.phase === 'REVEAL') {
+            document.getElementById('phase-reveal').classList.remove('hidden');
+            if (isSpectator) {
+              document.getElementById('role-card').innerText = "👁️ 您目前為觀眾席，無法參與遊戲";
+            } else {
+              if (!document.getElementById('role-card').innerText.includes("你的身分是")) {
+                document.getElementById('role-card').innerText = "點擊翻開卡片";
+              }
+            }
+            if (isHost) document.getElementById('btn-start-speech').classList.remove('hidden');
+            else document.getElementById('btn-start-speech').classList.add('hidden');
+          }
+          // 【階段 2】口頭發言
+          else if (roomData.phase === 'DAY_SPEECH') {
+            document.getElementById('phase-speech').classList.remove('hidden');
+            if (isHost) document.getElementById('btn-enter-night').classList.remove('hidden');
+            else document.getElementById('btn-enter-night').classList.add('hidden');
+          }
+          // 【階段 3】狼人行動
+          else if (roomData.phase === 'NIGHT_WOLF') {
+            document.getElementById('phase-wolf').classList.remove('hidden');
+            let wolfTitle = document.getElementById('wolf-title');
+            let wolfTargetList = document.getElementById('wolf-target-list');
+
+            if (myRole === '狼人' && !isSpectator) {
+              wolfTitle.innerHTML = `<span style="color:#e74c3c;">🐺 狼人請指定殺一名玩家：</span>`;
+              let targetsHtml = `<div style="display:flex; flex-direction:column; gap:8px;">`;
+              
+              Object.entries(roomData.players).filter(p => !p[1].isSpectator).forEach(([id, p]) => {
+                let isSelected = (roomData.wolfTarget === id);
+                let bg = isSelected ? '#c0392b' : '#555';
+                targetsHtml += `<button style="background:${bg}; padding:15px; font-size:18px; width:100%; border-radius:8px;" onclick="wolfSelect('${id}')">${p.name}</button>`;
+              });
+              
+              targetsHtml += `</div>`;
+              wolfTargetList.innerHTML = targetsHtml;
+            } else {
+              wolfTitle.innerText = "🌙 夜晚降臨... 狼人行動中";
+              wolfTargetList.innerHTML = "";
+            }
+
+            if (isHost) {
+              let nextBtn = document.getElementById('btn-wolf-next');
+              nextBtn.classList.remove('hidden');
+              // 如果狼人還沒選擇，房主的下一步按鈕就鎖住
+              nextBtn.disabled = !roomData.wolfTarget;
+            } else {
+              document.getElementById('btn-wolf-next').classList.add('hidden');
+            }
+          }
+        }
+      });
+    }
+
+    // 調整身分數量 (+1 / -1)
+    window.adjustRole = function(role, change) {
+      if (roleCounts[role] + change < 0) return;
+      roleCounts[role] += change;
+      updateRoleSettingsUI();
+    };
+
+    // 更新發牌 UI 狀態
+    function updateRoleSettingsUI() {
+      let totalSelectedRoles = 0;
+      for (let role in roleCounts) {
+        if(document.getElementById(`count-${role}`)) {
+          document.getElementById(`count-${role}`).innerText = roleCounts[role];
+        }
+        totalSelectedRoles += roleCounts[role];
+      }
+
+      const summaryText = `已選身分：${totalSelectedRoles} / 已坐座位：${currentPlayersCount} 人 (房間上限 ${maxPlayersLimit} 人)`;
+      document.getElementById('role-summary').innerText = summaryText;
+
+      const startBtn = document.getElementById('start-btn');
+      if (isHost) {
+        document.getElementById('host-role-settings').classList.remove('hidden');
+        if (totalSelectedRoles === currentPlayersCount && currentPlayersCount > 0) {
+          startBtn.disabled = false;
+          startBtn.innerText = "確認人數與身分，正式發牌！";
+        } else {
+          startBtn.disabled = true;
+          startBtn.innerText = `身分數量與就座人數不符 (${totalSelectedRoles}/${currentPlayersCount})`;
+        }
+      } else {
+        document.getElementById('host-role-settings').classList.add('hidden');
+      }
+    }
+
+    // 房主：正式發牌開始
+    window.startGame = function() {
+      let rolesPool = [];
+      for (let role in roleCounts) {
+        for (let i = 0; i < roleCounts[role]; i++) {
+          rolesPool.push(role);
+        }
+      }
+      rolesPool.sort(() => Math.random() - 0.5);
+
+      onValue(ref(db, `rooms/${currentRoomId}/players`), (snapshot) => {
+        const players = snapshot.val();
+        if (!players) return;
+
+        let activePlayers = Object.keys(players).filter(id => !players[id].isSpectator);
+        
+        activePlayers.forEach((id, index) => {
+          if (rolesPool[index]) {
+            update(ref(db, `rooms/${currentRoomId}/players/${id}`), { role: rolesPool[index] });
+          }
+        });
+
+        // 發完牌後進入第一階段(確認卡片)
+        update(ref(db, 'rooms/' + currentRoomId), { phase: 'REVEAL', wolfTarget: null });
+      }, { onlyOnce: true });
+    };
+
+    // 房主：重新開始 (重置回大廳)
+    window.restartGame = function() {
+      if (!confirm("確定要重新開始遊戲嗎？所有人將回到選職大廳。")) return;
+      
+      onValue(ref(db, `rooms/${currentRoomId}/players`), (snapshot) => {
+        const players = snapshot.val();
+        if (!players) return;
+        let updates = {};
+        for (let id in players) {
+          updates[`rooms/${currentRoomId}/players/${id}/role`] = "未分配";
+        }
+        updates[`rooms/${currentRoomId}/phase`] = 'LOBBY';
+        updates[`rooms/${currentRoomId}/wolfTarget`] = null;
+        update(ref(db), updates);
+      }, { onlyOnce: true });
+    };
+
+    // 房主：關閉房間
+    window.closeRoom = function() {
+      if (!confirm("確定要關閉房間嗎？所有玩家將被剔除回到首頁。")) return;
+      remove(ref(db, 'rooms/' + currentRoomId));
+    };
+
+    // 翻牌功能
+    window.toggleRole = function() {
+      if (isSpectator) return;
+      const card = document.getElementById('role-card');
+      if (card.innerText === "點擊翻開卡片") {
+        card.innerText = "你的身分是：" + myRole;
+      } else {
+        card.innerText = "點擊翻開卡片";
+      }
+    };
+  </script>
+</head>
+<body>
+
+  <!-- 房主專屬右上角按鈕 -->
+  <div id="host-controls" class="hidden">
+    <button class="btn-secondary" onclick="restartGame()">🔄 重新開始</button>
+    <button class="btn-danger" onclick="closeRoom()">❌ 關閉房間</button>
+  </div>
+
+  <h1>死或活</h1>
+  <p id="room-info-bar" style="color: #f39c12; font-weight: bold;"></p>
+
+  <!-- 1. 首頁選單 -->
+  <div id="home-area" class="card">
+    <div id="home-menu">
+      <h3>準備好你的陰謀了嗎~</h3><br>
+      <button class="btn-success" onclick="showCreateRoomMenu()">➕ 建立房間 (房主)</button><br><br>
+      <button class="btn-secondary" onclick="showJoinRoomMenu()">🔑 加入房間 (玩家)</button>
+    </div>
+
+    <!-- 建立房間 -->
+    <div id="create-room-form" class="hidden">
+      <h3>建立新房間</h3>
+      <input type="text" id="hostName" placeholder="輸入您的暱稱"><br>
+      <input type="number" id="maxPlayers" placeholder="設定玩家上限人數 (例如: 6)" value="6"><br><br>
+      <button class="btn-success" onclick="createRoom()">建立並進入</button>
+      <button onclick="showHomeMenu()">返回</button>
+    </div>
+
+    <!-- 加入房間 -->
+    <div id="join-room-form" class="hidden">
+      <h3>加入房間</h3>
+      <input type="number" id="joinRoomId" placeholder="輸入 5 位數房間代碼"><br>
+      <input type="text" id="joinName" placeholder="輸入您的暱稱"><br><br>
+      <button class="btn-secondary" onclick="joinRoom()">加入</button>
+      <button onclick="showHomeMenu()">返回</button>
+    </div>
+  </div>
+
+  <!-- 2. 大廳區域 -->
+  <div id="lobby-area" class="card hidden">
+    <h3>🎮 遊玩列座位區</h3>
+    
+    <ul id="player-list" style="list-style:none; padding:0; text-align:left; max-width: 350px; margin: 10px auto; line-height: 1.8;"></ul>
+
+    <h4 style="margin-top:25px; color:#aaa;">👁️ 觀眾席列表：</h4>
+    <ul id="spectator-list" style="list-style:none; padding:0; text-align:left; max-width: 350px; margin: 5px auto; line-height: 1.6; color:#bbb;"></ul>
+
+    <hr style="border-color: #555; margin: 20px 0;">
+
+    <div id="host-role-settings" class="hidden">
+      <h3>⚙️ 身分數量設定 (房主操作)</h3>
+      <div class="role-setting"><span>🐺 狼人</span><div><button class="btn-counter" onclick="adjustRole('狼人', -1)">-</button><span id="count-狼人" class="badge">1</span><button class="btn-counter" onclick="adjustRole('狼人', 1)">+</button></div></div>
+      <div class="role-setting"><span>👮 警察</span><div><button class="btn-counter" onclick="adjustRole('警察', -1)">-</button><span id="count-警察" class="badge">1</span><button class="btn-counter" onclick="adjustRole('警察', 1)">+</button></div></div>
+      <div class="role-setting"><span>👨‍🌾 平民</span><div><button class="btn-counter" onclick="adjustRole('平民', -1)">-</button><span id="count-平民" class="badge">1</span><button class="btn-counter" onclick="adjustRole('平民', 1)">+</button></div></div>
+      <div class="role-setting"><span>🩺 醫生</span><div><button class="btn-counter" onclick="adjustRole('醫生', -1)">-</button><span id="count-醫生" class="badge">1</span><button class="btn-counter" onclick="adjustRole('醫生', 1)">+</button></div></div>
+      <div class="role-setting"><span>🧙‍♀️ 女巫</span><div><button class="btn-counter" onclick="adjustRole('女巫', -1)">-</button><span id="count-女巫" class="badge">1</span><button class="btn-counter" onclick="adjustRole('女巫', 1)">+</button></div></div>
+      <div class="role-setting"><span>🏹 獵人</span><div><button class="btn-counter" onclick="adjustRole('獵人', -1)">-</button><span id="count-獵人" class="badge">1</span><button class="btn-counter" onclick="adjustRole('獵人', 1)">+</button></div></div>
+      
+      <p id="role-summary" style="font-size:14px; color:#f39c12; font-weight:bold; margin-top:15px;"></p>
+      <button id="start-btn" onclick="startGame()" disabled>等待人數與身分相符...</button>
+    </div>
+  </div>
+
+  <!-- 3. 遊戲進行區域 -->
+  <div id="game-area" class="card hidden">
+    
+    <!-- 階段 1：翻牌 -->
+    <div id="phase-reveal" class="hidden">
+      <h2>發牌完畢，請確認身分</h2>
+      <div class="card" id="role-card" onclick="toggleRole()" style="cursor:pointer; background:#444; padding: 40px 20px; font-size: 20px; min-height: 40px; display: flex; align-items: center; justify-content: center;">
+        點擊翻開卡片
+      </div>
+      <br>
+      <button id="btn-start-speech" class="btn-success hidden" style="width:100%; padding: 15px; font-size:18px;" onclick="nextPhase('DAY_SPEECH')">遊戲開始</button>
+    </div>
+
+    <!-- 階段 2：發言 -->
+    <div id="phase-speech" class="hidden">
+      <h2 style="color:#3498db; font-size:28px;">📢 請發言</h2>
+      <p style="font-size:18px;">現在是自由討論時間，請大家輪流口頭發言。</p>
+      <br>
+      <button id="btn-enter-night" class="btn-danger hidden" style="width:100%; padding: 15px; font-size:18px;" onclick="nextPhase('NIGHT_WOLF')">進入夜晚</button>
+    </div>
+
+    <!-- 階段 3：狼人 -->
+    <div id="phase-wolf" class="hidden">
+      <h2 id="wolf-title">🌙 夜晚降臨...</h2>
+      <div id="wolf-target-list" style="margin: 15px 0;"></div>
+      <br>
+      <button id="btn-wolf-next" class="btn-secondary hidden" style="width:100%; padding: 15px; font-size:18px;" onclick="nextPhase('DAY_SPEECH')">下一步</button>
+    </div>
+
+  </div>
+
+</body>
+</html>
