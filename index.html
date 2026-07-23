@@ -246,6 +246,8 @@
     let lastHunterShotId = null;
     let wolfAutoAdvancing = false;
     let wolfAutoRound = null;
+    let wolfTimerInterval = null;
+    let wolfTimerFor = null;
     let hostPeekIds = new Set();
     let lastActivePlayers = [];
 
@@ -401,6 +403,13 @@
       return false;
     }
 
+    // 是否有「存活」的該身分玩家（死亡或未選此身分則回傳 false）
+    function hasAliveRole(roomData, roleName) {
+      return Object.values(roomData.players || {}).some(p =>
+        !p.isSpectator && p.isAlive && p.role === roleName
+      );
+    }
+
     // 勝負判定：考慮本次剛死亡的玩家（roomData.players.isAlive 尚未寫入）
     function checkWinnerAfterDeaths(roomData, newlyDeadIds) {
       const deadSet = new Set(newlyDeadIds || []);
@@ -534,6 +543,11 @@
         clearInterval(voteTimerInterval);
         voteTimerInterval = null;
         voteTimerFor = null;
+      }
+      if (roomData.phase !== 'NIGHT_WOLF') {
+        if (wolfTimerInterval) { clearInterval(wolfTimerInterval); wolfTimerInterval = null; }
+        wolfTimerFor = null;
+        wolfAutoAdvancing = false;
       }
       if (roomData.phase !== 'HUNTER_SHOT') {
         hunterFinalizing = false;
@@ -714,16 +728,32 @@
         if (isHost) {
           hostControls.classList.remove('hidden');
           let aliveWolves = activePlayers.filter(p => p.role === '狼人' && p.isAlive);
-          let allLocked = aliveWolves.length > 0 && aliveWolves.every(w => roomData.wolfLocked && roomData.wolfLocked[w.id]);
-          let agreed = checkAgreedTarget(aliveWolves, roomData.wolfVotes);
-          if (roomData.round !== wolfAutoRound) { wolfAutoRound = roomData.round; wolfAutoAdvancing = false; }
-          if (allLocked && agreed && agreed !== 'NO_ALIVE' && !wolfAutoAdvancing) {
-            wolfAutoAdvancing = true;
-            advanceFromWolf(roomData, agreed);
+          // 用輪詢 interval 重新檢查最新 latestRoomData，避免單一次 onValue 事件遺漏導致卡住
+          if (wolfTimerFor !== roomData.round) {
+            if (wolfTimerInterval) clearInterval(wolfTimerInterval);
+            wolfTimerFor = roomData.round;
+            wolfAutoAdvancing = false;
+            wolfTimerInterval = setInterval(() => {
+              let rd = latestRoomData;
+              if (!rd || rd.phase !== 'NIGHT_WOLF') {
+                clearInterval(wolfTimerInterval); wolfTimerInterval = null;
+                return;
+              }
+              let aw = Object.entries(rd.players || {})
+                .filter(([id, p]) => !p.isSpectator && p.isAlive && p.role === '狼人')
+                .map(([id]) => id);
+              if (aw.length === 0) return;
+              let allLocked = aw.every(id => rd.wolfLocked && rd.wolfLocked[id]);
+              let agreed = checkAgreedTarget(aw, rd.wolfVotes);
+              if (allLocked && agreed && agreed !== 'NO_ALIVE' && !wolfAutoAdvancing) {
+                wolfAutoAdvancing = true;
+                advanceFromWolf(rd, agreed);
+              }
+            }, 500);
           }
           btnHostNext.innerText = "⚡ 強制下一步（無人被殺）";
           btnHostNext.disabled = false;
-          btnHostNext.onclick = () => advanceFromWolf(roomData, null);
+          btnHostNext.onclick = () => advanceFromWolf(latestRoomData, null);
         }
       }
       // --- 4. 夜晚：警察回合 ---
@@ -780,9 +810,9 @@
             btnHostNext.disabled = false;
             btnHostNext.onclick = () => {
               let updates = {};
-              if (hasRoleInGame(roomData, '醫生')) {
+              if (hasAliveRole(roomData, '醫生')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_DOCTOR';
-              } else if (hasRoleInGame(roomData, '女巫')) {
+              } else if (hasAliveRole(roomData, '女巫')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
               } else {
                 calculateNightEndViaData(roomData, updates);
@@ -805,19 +835,30 @@
         if (isDead) {
           html += `<h2>👻 醫生回合 (你已死亡)</h2>`;
         } else if (myRole === '醫生') {
+          let needsLeft = (roomData.doctorState && typeof roomData.doctorState.needsLeft === 'number') ? roomData.doctorState.needsLeft : 2;
           if (roomData.doctorTarget) {
-            let target = activePlayers.find(p => p.id === roomData.doctorTarget);
-            html += `<div style="background:linear-gradient(135deg,#27ae60,#145a32); padding:15px; border-radius:8px;">
-                       <h3>🩺 你已選擇急救：<b>${target ? target.name : '未知'}</b></h3>
-                     </div>`;
+            if (roomData.doctorTarget === 'none') {
+              html += `<div style="background:linear-gradient(135deg,#27ae60,#145a32); padding:15px; border-radius:8px;">
+                         <h3>🩺 今晚不施打急救針</h3><p>剩餘急救針：${needsLeft} / 2</p>
+                       </div>`;
+            } else {
+              let target = activePlayers.find(p => p.id === roomData.doctorTarget);
+              html += `<div style="background:linear-gradient(135deg,#27ae60,#145a32); padding:15px; border-radius:8px;">
+                         <h3>🩺 你已選擇急救：<b>${target ? target.name : '未知'}</b></h3><p>剩餘急救針：${needsLeft} / 2</p>
+                       </div>`;
+            }
           } else {
-            html += `<h2>🩺 醫生行動</h2><p style="color:#5fd68a;">請選擇今晚要拯救的對象：</p>`;
-            activePlayers.filter(p => p.isAlive).forEach(p => {
-              let isMyTarget = (roomData.doctorTarget === p.id);
-              html += `<button class="target-btn ${isMyTarget ? 'btn-success' : 'btn-secondary'}" onclick="doctorAction('${p.id}')">
-                        ${p.name} ${isMyTarget ? '🩺 (已選擇)' : ''}
-                       </button>`;
-            });
+            html += `<h2>🩺 醫生行動</h2>`;
+            html += `<p style="color:#5fd68a;">剩餘急救針：<b>${needsLeft} / 2</b>（每局共 2 針，每晚最多 1 針）</p>`;
+            if (needsLeft <= 0) {
+              html += `<p style="color:#e23b3b;">⚠️ 你的急救針已用完，今晚無法施打。</p>`;
+            } else {
+              html += `<p style="color:#5fd68a;">請選擇今晚要拯救的對象：</p>`;
+              activePlayers.filter(p => p.isAlive).forEach(p => {
+                html += `<button class="target-btn btn-secondary" onclick="doctorAction('${p.id}')">${p.name}</button>`;
+              });
+            }
+            html += `<div class="decide-bar" style="margin-top:10px;"><button class="btn-ghost" style="width:92%; font-size:16px; padding:11px;" onclick="doctorSkip()">⏭️ 今晚不施打</button></div>`;
           }
         } else {
           html += `<h2>🩺 醫生行動中...</h2><p style="font-size:22px;">請繼續閉眼稍候...</p>`;
@@ -833,7 +874,7 @@
             btnHostNext.disabled = false;
             btnHostNext.onclick = () => {
               let updates = {};
-              if (hasRoleInGame(roomData, '女巫')) {
+              if (hasAliveRole(roomData, '女巫')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
               } else {
                 calculateNightEndViaData(roomData, updates);
@@ -843,8 +884,9 @@
               update(ref(db), updates);
             };
           } else {
-            btnHostNext.innerText = "等待醫生決定...";
-            btnHostNext.disabled = true;
+            btnHostNext.innerText = "⚡ 強制跳過（醫生不行動）";
+            btnHostNext.disabled = false;
+            btnHostNext.onclick = () => set(ref(db, `rooms/${currentRoomId}/doctorTarget`), 'none');
           }
         }
       }
@@ -853,7 +895,9 @@
         let isDead = !roomData.players[myPlayerId].isAlive;
         let html = baseHTML;
 
-        if (myRole === '女巫') {
+        if (isDead) {
+          html += `<h2>👻 女巫回合 (你已死亡)</h2>`;
+        } else if (myRole === '女巫') {
           if (roomData.witchAction) {
             let actionText = roomData.witchAction.type === 'heal' ? '使用了解藥 💉' :
                              roomData.witchAction.type === 'poison' ? '使用了毒藥 🧪' : '沒有使用任何藥水 ⏭️';
@@ -870,7 +914,7 @@
               html += `<p style="color:#f3d77a;">⚠️ 昨晚 <b>${victimName}</b> 遇害了。</p>
                        <button class="btn-success target-btn" onclick="witchAction('heal', '${roomData.killedByWolf}')">💉 使用解藥救他</button><hr>`;
             } else if (roomData.witchState?.hasHeal) {
-              html += `<p style="color:#c9c2b3;">⚠️ 昨晚平安夜 (無人遇害)。</p><hr>`;
+              html += `<p style="color:#c9c2b3;">⚠️ 昨晚平安夜，無人遇害。</p><hr>`;
             }
 
             if (roomData.witchState?.hasPoison) {
@@ -901,8 +945,9 @@
               update(ref(db), updates);
             };
           } else {
-            btnHostNext.innerText = "等待女巫決定...";
-            btnHostNext.disabled = true;
+            btnHostNext.innerText = "⚡ 強制跳過（女巫不行動）";
+            btnHostNext.disabled = false;
+            btnHostNext.onclick = () => set(ref(db, `rooms/${currentRoomId}/witchAction`), { type: 'skip', target: null });
           }
         }
       }
@@ -1082,7 +1127,7 @@
           <h2>🕯️ 遺言時間</h2>
           <p style="font-size:20px; margin: 20px 0; line-height:1.8;">
             <b style="color:#e23b3b; font-size:28px;">${eliminated ? eliminated.name : '該玩家'}</b> 已被放逐<br>
-            請發表最後遺言，其餘玩家請安靜聆聽
+            請發表最後遺言
           </p>
           ${hunterRecap}`;
 
@@ -1104,18 +1149,26 @@
       // 計算結算時需讀到有效值（updates 尚未寫回 DB）
       const effectiveRoomData = { ...roomData, killedByWolf: effectiveKilledByWolf };
 
-      if (hasRoleInGame(roomData, '警察')) {
+      if (hasAliveRole(roomData, '警察')) {
         updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_POLICE';
-      } else if (hasRoleInGame(roomData, '醫生')) {
+      } else if (hasAliveRole(roomData, '醫生')) {
         updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_DOCTOR';
-      } else if (hasRoleInGame(roomData, '女巫')) {
+      } else if (hasAliveRole(roomData, '女巫')) {
         updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
       } else {
         calculateNightEndViaData(effectiveRoomData, updates);
-        update(ref(db), updates);
+        update(ref(db), updates).catch(err => {
+          console.error('狼人回合推進寫入失敗：', err);
+          alert('推進失敗，請再試一次：' + err.message);
+          wolfAutoAdvancing = false;
+        });
         return;
       }
-      update(ref(db), updates);
+      update(ref(db), updates).catch(err => {
+        console.error('狼人回合推進寫入失敗：', err);
+        alert('推進失敗，請再試一次：' + err.message);
+        wolfAutoAdvancing = false;
+      });
     }
 
     function calculateNightEndViaData(roomData, updates) {
@@ -1305,7 +1358,21 @@
 
     window.doctorAction = function(targetId) {
       if (isSpectator) return;
-      set(ref(db, `rooms/${currentRoomId}/doctorTarget`), targetId)
+      let rd = latestRoomData || {};
+      if (rd.doctorTarget) return; // 已決定，防止重複扣針
+      let needsLeft = (rd.doctorState && typeof rd.doctorState.needsLeft === 'number') ? rd.doctorState.needsLeft : 2;
+      if (needsLeft <= 0) return alert("你的急救針已用完，今晚無法施打。");
+      let updates = {};
+      updates[`rooms/${currentRoomId}/doctorTarget`] = targetId;
+      updates[`rooms/${currentRoomId}/doctorState/needsLeft`] = needsLeft - 1;
+      update(ref(db), updates).catch(err => alert("選擇失敗，請再試一次：" + err.message));
+    };
+
+    window.doctorSkip = function() {
+      if (isSpectator) return;
+      let rd = latestRoomData || {};
+      if (rd.doctorTarget) return;
+      set(ref(db, `rooms/${currentRoomId}/doctorTarget`), 'none')
         .catch(err => alert("選擇失敗，請再試一次：" + err.message));
     };
 
@@ -1450,6 +1517,7 @@
         updates[`rooms/${currentRoomId}/phase`] = 'CARD_REVEAL';
         updates[`rooms/${currentRoomId}/roleCounts`] = roleCounts;
         updates[`rooms/${currentRoomId}/witchState`] = { hasHeal: true, hasPoison: true };
+        updates[`rooms/${currentRoomId}/doctorState`] = { needsLeft: 2 };
         updates[`rooms/${currentRoomId}/round`] = 1;
         updates[`rooms/${currentRoomId}/winner`] = null;
         update(ref(db), updates);
@@ -1472,6 +1540,7 @@
           [`rooms/${currentRoomId}/killedByWolf`]: null,
           [`rooms/${currentRoomId}/lastNightDeaths`]: null,
           [`rooms/${currentRoomId}/witchState`]: null,
+          [`rooms/${currentRoomId}/doctorState`]: null,
           [`rooms/${currentRoomId}/dayVotes`]: null,
           [`rooms/${currentRoomId}/dayConfirmed`]: null,
           [`rooms/${currentRoomId}/dayResultText`]: null,
