@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>iPad 狼人殺</title>
+  <title>dead or alife</title>
   <style>
     body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; margin: 0; }
     .card { background: #333; padding: 20px; border-radius: 10px; margin: 15px auto; max-width: 450px; position: relative; }
@@ -32,6 +32,22 @@
     .in-game-list { background: #222; padding: 12px; border-radius: 8px; margin-bottom: 20px; text-align: left; }
     .in-game-list h4 { margin: 0 0 10px 0; color: #3498db; }
     .list-item { margin: 6px 0; font-size: 16px; border-bottom: 1px solid #333; padding-bottom: 4px;}
+
+    .flip-container { perspective: 1000px; width: 240px; height: 320px; margin: 25px auto; }
+    .flip-card { position: relative; width: 100%; height: 100%; transition: transform 0.6s; transform-style: preserve-3d; cursor: pointer; }
+    .flip-card.flipped { transform: rotateY(180deg); }
+    .flip-face { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; box-shadow: 0 8px 20px rgba(0,0,0,0.4); }
+    .flip-front { background: linear-gradient(135deg, #2c3e50, #1a1a2e); border: 3px solid #f39c12; }
+    .flip-front .moon { font-size: 60px; }
+    .flip-back { transform: rotateY(180deg); color: white; border: 3px solid rgba(255,255,255,0.35); }
+    .flip-back .role-icon { font-size: 72px; margin-bottom: 12px; }
+    .flip-back .role-name { font-size: 28px; font-weight: bold; margin-bottom: 12px; }
+    .flip-back .role-desc { font-size: 14px; opacity: 0.9; line-height: 1.5; }
+
+    #vote-timer { font-size: 26px; color: #f1c40f; font-weight: bold; margin: 10px 0; }
+    #role-summary-readonly { background: #222; padding: 12px; border-radius: 8px; margin-top: 10px; }
+    #role-readonly-list { text-align: left; max-width: 250px; margin: 0 auto; }
+    .role-readonly-row { display: flex; justify-content: space-between; padding: 4px 0; }
   </style>
   
   <script type="module">
@@ -62,6 +78,19 @@
     let localRoleFlipped = false;
 
     let roleCounts = { "狼人": 1, "警察": 1, "平民": 1, "醫生": 1, "女巫": 1, "獵人": 1 };
+    let latestRoomData = null;
+    let voteTimerInterval = null;
+    let voteTimerFor = null;
+
+    const roleInfo = {
+      "狼人": { icon: "🐺", color: "linear-gradient(135deg,#c0392b,#7b241c)", desc: "每晚與狼隊友一起選擇一位玩家殺害" },
+      "警察": { icon: "👮", color: "linear-gradient(135deg,#2980b9,#1a5276)", desc: "每晚可以查驗一位玩家的真實身分" },
+      "平民": { icon: "👨‍🌾", color: "linear-gradient(135deg,#7f8c8d,#4d5656)", desc: "沒有特殊能力，靠邏輯推理找出狼人" },
+      "醫生": { icon: "🩺", color: "linear-gradient(135deg,#27ae60,#145a32)", desc: "每晚可以救治一位受傷的玩家" },
+      "女巫": { icon: "🧙‍♀️", color: "linear-gradient(135deg,#8e44ad,#512e5f)", desc: "擁有解藥與毒藥各一瓶，可救人或毒人" },
+      "獵人": { icon: "🏹", color: "linear-gradient(135deg,#d35400,#7e3300)", desc: "被淘汰時可以開槍帶走一位玩家" },
+      "觀眾": { icon: "👁️", color: "linear-gradient(135deg,#95a5a6,#616a6b)", desc: "在旁觀戰，無法參與遊戲" }
+    };
 
     window.showCreateRoomMenu = () => { document.getElementById('home-menu').classList.add('hidden'); document.getElementById('create-room-form').classList.remove('hidden'); };
     window.showJoinRoomMenu = () => { document.getElementById('home-menu').classList.add('hidden'); document.getElementById('join-room-form').classList.remove('hidden'); };
@@ -127,20 +156,34 @@
       }
     };
 
-    function generatePlayerListHTML(activePlayers) {
+    function generatePlayerListHTML(activePlayers, voteCounts) {
       let html = `<div class="in-game-list"><h4>📋 玩家名單</h4>`;
       activePlayers.forEach(p => {
         let status = p.isAlive ? "🟢" : "💀";
         let roleStr = "";
         if (!p.isAlive) {
-          roleStr = `<span style="color:#e74c3c; font-size: 14px;">(淘汰 - 身分: ${p.role})</span>`;
+          let info = roleInfo[p.role] || {};
+          roleStr = `<span style="color:#e74c3c; font-size: 14px;">(淘汰 - 身分: ${info.icon || ''}${p.role})</span>`;
         } else if (p.id === myPlayerId) {
           roleStr = `<span style="color:#f39c12; font-size: 14px;">(你 - ${myRole})</span>`;
+        } else if (myRole && p.role === myRole && !['平民', '未分配', '觀眾'].includes(myRole)) {
+          roleStr = `<span style="color:#9b59b6; font-size: 14px;">(同伴 - ${p.role})</span>`;
         }
-        html += `<div class="list-item">${status} ${p.name} ${roleStr}</div>`;
+        let voteStr = "";
+        if (voteCounts && p.isAlive) {
+          let c = voteCounts[p.id] || 0;
+          if (c > 0) voteStr = `<span style="color:#f1c40f; font-size: 14px;"> 🗳️ ${c} 票</span>`;
+        }
+        html += `<div class="list-item">${status} ${p.name} ${roleStr}${voteStr}</div>`;
       });
       html += `</div>`;
       return html;
+    }
+
+    function computeVoteCounts(votesObj) {
+      let counts = {};
+      if (votesObj) Object.values(votesObj).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+      return counts;
     }
 
     function checkAgreedTarget(aliveRolePlayers, votesObj) {
@@ -160,6 +203,24 @@
       return false;
     }
 
+    function nightResetUpdates(round) {
+      return {
+        phase: 'NIGHT_WOLF',
+        round: round,
+        wolfVotes: null,
+        policeVotes: null,
+        policeResult: null,
+        doctorTarget: null,
+        witchAction: null,
+        killedByWolf: null,
+        lastNightDeaths: null,
+        dayVotes: null,
+        dayResultText: null,
+        dayEliminatedId: null,
+        voteEndTime: null
+      };
+    }
+
     function listenToRoomData() {
       onValue(ref(db, 'rooms/' + currentRoomId), (snapshot) => {
         const roomData = snapshot.val();
@@ -169,6 +230,7 @@
           return;
         }
 
+        latestRoomData = roomData;
         maxPlayersLimit = roomData.maxPlayers;
         if (roomData.roleCounts) roleCounts = roomData.roleCounts;
         if (isHost) document.getElementById('host-controls').classList.remove('hidden');
@@ -233,7 +295,13 @@
       const btnHostNext = document.getElementById('btn-host-next');
       hostControls.classList.add('hidden'); 
 
-      let baseHTML = generatePlayerListHTML(activePlayers);
+      let baseHTML = generatePlayerListHTML(activePlayers, roomData.phase === 'DAY_VOTE' ? computeVoteCounts(roomData.dayVotes) : null);
+
+      if (roomData.phase !== 'DAY_VOTE' && voteTimerInterval) {
+        clearInterval(voteTimerInterval);
+        voteTimerInterval = null;
+        voteTimerFor = null;
+      }
 
       if (isSpectator) {
         gameContent.innerHTML = baseHTML + `<div class="card" style="background:#555;">👁️ 您目前為觀眾席，無法參與遊戲操作<br>目前階段：${getPhaseName(roomData.phase)}</div>`;
@@ -242,10 +310,21 @@
 
       // --- 1. 確認身分階段 ---
       if (roomData.phase === 'CARD_REVEAL') {
+        let info = roleInfo[myRole] || { icon: '❓', color: '#555', desc: '' };
         gameContent.innerHTML = baseHTML + `
           <h2>🃏 請確認你的身分</h2>
-          <div class="card" id="role-card" onclick="toggleRole()" style="cursor:pointer; background:#444; padding: 40px 20px; font-size: 24px;">
-            ${localRoleFlipped ? '你的身分是：' + myRole : '點擊翻開卡片'}
+          <div class="flip-container">
+            <div class="flip-card ${localRoleFlipped ? 'flipped' : ''}" id="role-card" onclick="toggleRole()">
+              <div class="flip-face flip-front">
+                <div class="moon">🌙</div>
+                <p style="margin-top:15px; font-size:16px; color:#f39c12;">點擊翻牌查看身分</p>
+              </div>
+              <div class="flip-face flip-back" style="background:${info.color};">
+                <div class="role-icon">${info.icon}</div>
+                <div class="role-name">${myRole}</div>
+                <div class="role-desc">${info.desc}</div>
+              </div>
+            </div>
           </div>`;
         
         if (isHost) {
@@ -259,25 +338,14 @@
       else if (roomData.phase === 'DAY_DISCUSS') {
         gameContent.innerHTML = baseHTML + `
           <h2>🗣️ 白天 發言時間</h2>
-          <p style="font-size:20px; color:#f39c12; font-weight:bold; margin: 20px 0;">請大家自由討論，並準備進入夜晚</p>
+          <p style="font-size:20px; color:#f39c12; font-weight:bold; margin: 20px 0;">請大家輪流發言，夜晚即將來臨</p>
         `;
         if (isHost) {
           hostControls.classList.remove('hidden');
-          btnHostNext.innerText = "進入夜晚 (天黑請閉眼)";
+          btnHostNext.innerText = "天黑請閉眼";
           btnHostNext.disabled = false;
           btnHostNext.onclick = () => {
-            update(ref(db, `rooms/${currentRoomId}`), { 
-              phase: 'NIGHT_WOLF', 
-              wolfVotes: null, 
-              policeVotes: null,
-              policeResult: null,
-              doctorTarget: null,
-              witchAction: null,
-              killedByWolf: null,
-              lastNightDeaths: null,
-              dayVotes: null,
-              dayResultText: null
-            });
+            update(ref(db, `rooms/${currentRoomId}`), nightResetUpdates(1));
           };
         }
       }
@@ -289,7 +357,7 @@
         if (isDead) {
           html += `<h2>👻 你已死亡，請安靜觀戰</h2>`;
         } else if (myRole === '狼人') {
-          html += `<h2>🐺 狼人行動</h2><p style="color:#e74c3c;">請選擇你要殺害的對象 (不可選擇狼人隊友)：</p>`;
+          html += `<h2>🐺 狼人行動 (第 ${roomData.round || 1} 夜)</h2><p style="color:#e74c3c;">請選擇你要殺害的對象：</p>`;
           activePlayers.filter(p => p.isAlive && p.role !== '狼人').forEach(p => {
             let voteCount = 0;
             let isMyTarget = false;
@@ -308,7 +376,7 @@
                      </button>`;
           });
         } else {
-          html += `<h2>🌙 夜晚降臨</h2><p style="font-size:22px; margin: 30px 0;">狼人行動中，請閉眼稍候...</p>`;
+          html += `<h2>🌙 夜晚降臨 (第 ${roomData.round || 1} 夜)</h2><p style="font-size:22px; margin: 30px 0;">狼人行動中，請閉眼稍候...</p>`;
         }
         gameContent.innerHTML = html;
 
@@ -339,7 +407,7 @@
               update(ref(db), updates);
             };
           } else {
-            btnHostNext.innerText = "等待狼人統一意見...";
+            btnHostNext.innerText = "等待狼人獵殺一人...";
             btnHostNext.disabled = true;
           }
         }
@@ -362,7 +430,7 @@
             html += `<h2>👮 警察行動</h2><p style="color:#3498db;">請選擇你要調查的對象：</p>`;
             let alivePolice = activePlayers.filter(p => p.role === '警察' && p.isAlive);
             
-            activePlayers.filter(p => p.isAlive).forEach(p => {
+            activePlayers.filter(p => p.isAlive && p.role !== '警察').forEach(p => {
               let voteCount = 0;
               let isMyTarget = false;
               if (roomData.policeVotes) {
@@ -385,7 +453,7 @@
             }
           }
         } else {
-          html += `<h2>👮 警察行動中...</h2><p style="font-size:22px;">請繼續閉眼稍候...</p>`;
+          html += `<h2>👮 警察行動中...</h2><p style="font-size:22px;">夜晚中，請稍候...</p>`;
         }
         gameContent.innerHTML = html;
 
@@ -545,32 +613,26 @@
           hostControls.classList.remove('hidden');
           btnHostNext.innerText = "進入白天投票環節";
           btnHostNext.disabled = false;
-          btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), { phase: 'DAY_VOTE' });
+          btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), { phase: 'DAY_VOTE', voteEndTime: Date.now() + 20000 });
         }
       }
       // --- 7. 白天投票放逐階段 ---
       else if (roomData.phase === 'DAY_VOTE') {
         let isDead = !roomData.players[myPlayerId].isAlive;
         let html = baseHTML;
+        let remaining = roomData.voteEndTime ? Math.max(0, Math.ceil((roomData.voteEndTime - Date.now()) / 1000)) : 20;
+
+        html += `<h2>🗳️ 白天投票環節 (第 ${roomData.round || 1} 天)</h2>
+                 <p id="vote-timer">⏳ 剩餘 <span id="vote-timer-val">${remaining}</span> 秒</p>`;
 
         if (isDead) {
-          html += `<h2>🗳️ 白天投票 (你已死亡，無法投票)</h2>`;
-        } else {
-          html += `<h2>🗳️ 白天投票環節</h2><p style="color:#3498db;">請選擇你認為應該被淘汰的玩家：</p>`;
+          html += `<p style="color:#888;">你已死亡，無法投票</p>`;
+        } else if (!roomData.dayResultText) {
+          html += `<p style="color:#3498db;">請選擇你認為應該被淘汰的玩家 (再次點擊該按鈕可撤回投票)：</p>`;
           activePlayers.filter(p => p.isAlive).forEach(p => {
-            let voteCount = 0;
-            let isMyTarget = false;
-            if (roomData.dayVotes) {
-              Object.keys(roomData.dayVotes).forEach(voterId => {
-                if (roomData.dayVotes[voterId] === p.id) {
-                  voteCount++;
-                  if (voterId === myPlayerId) isMyTarget = true;
-                }
-              });
-            }
-            let icons = '🗳️'.repeat(voteCount);
+            let isMyTarget = roomData.dayVotes && roomData.dayVotes[myPlayerId] === p.id;
             html += `<button class="target-btn ${isMyTarget ? 'btn-danger' : 'btn-secondary'}" onclick="voteAction('dayVotes', '${p.id}')">
-                      ${p.name} ${isMyTarget ? '🎯 (你選他)' : ''} ${icons}
+                      ${p.name} ${isMyTarget ? '🎯 (你選他，再按一次撤回)' : ''}
                      </button>`;
           });
         }
@@ -584,28 +646,59 @@
 
         gameContent.innerHTML = html;
 
+        // 倒數計時：每個裝置都顯示，但只有房主端在時間到時觸發結算，避免重複寫入
+        if (voteTimerFor !== roomData.voteEndTime) {
+          if (voteTimerInterval) clearInterval(voteTimerInterval);
+          voteTimerFor = roomData.voteEndTime;
+          voteTimerInterval = setInterval(() => {
+            if (!roomData.voteEndTime) return;
+            let left = Math.max(0, Math.ceil((roomData.voteEndTime - Date.now()) / 1000));
+            let el = document.getElementById('vote-timer-val');
+            if (el) el.innerText = left;
+            if (left <= 0) {
+              clearInterval(voteTimerInterval);
+              voteTimerInterval = null;
+              if (isHost && !roomData.dayResultText) {
+                calculateDayVoteResult(roomData);
+              }
+            }
+          }, 500);
+        }
+
         if (isHost) {
           hostControls.classList.remove('hidden');
-          btnHostNext.innerText = roomData.dayResultText ? "進入下一輪 (天黑)" : "結算投票結果";
+          if (!roomData.dayResultText) {
+            btnHostNext.innerText = "⏱️ 提前結束並結算";
+            btnHostNext.disabled = false;
+            btnHostNext.onclick = () => calculateDayVoteResult(roomData);
+          } else if (roomData.dayEliminatedId) {
+            btnHostNext.innerText = "下一步 (進入遺言時間)";
+            btnHostNext.disabled = false;
+            btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), { phase: 'LAST_WORDS' });
+          } else {
+            let nextRound = (roomData.round || 1) + 1;
+            btnHostNext.innerText = `🌙 進入第 ${nextRound} 晚`;
+            btnHostNext.disabled = false;
+            btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), nightResetUpdates(nextRound));
+          }
+        }
+      }
+      // --- 7.5 死者遺言階段 ---
+      else if (roomData.phase === 'LAST_WORDS') {
+        let eliminated = roomData.dayEliminatedId ? roomData.players[roomData.dayEliminatedId] : null;
+        gameContent.innerHTML = baseHTML + `
+          <h2>🕯️ 遺言時間</h2>
+          <p style="font-size:20px; margin: 20px 0; line-height:1.8;">
+            <b style="color:#e74c3c; font-size:28px;">${eliminated ? eliminated.name : '該玩家'}</b> 已被放逐<br>
+            請發表最後遺言，其餘玩家請安靜聆聽
+          </p>`;
+
+        if (isHost) {
+          hostControls.classList.remove('hidden');
+          let nextRound = (roomData.round || 1) + 1;
+          btnHostNext.innerText = `🌙 進入第 ${nextRound} 晚`;
           btnHostNext.disabled = false;
-          btnHostNext.onclick = () => {
-            if (!roomData.dayResultText) {
-              calculateDayVoteResult(roomData);
-            } else {
-              update(ref(db, `rooms/${currentRoomId}`), { 
-                phase: 'NIGHT_WOLF', 
-                wolfVotes: null, 
-                policeVotes: null,
-                policeResult: null,
-                doctorTarget: null,
-                witchAction: null,
-                killedByWolf: null,
-                lastNightDeaths: null,
-                dayVotes: null,
-                dayResultText: null
-              });
-            }
-          };
+          btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), nightResetUpdates(nextRound));
         }
       }
     }
@@ -639,42 +732,44 @@
     }
 
     function calculateDayVoteResult(roomData) {
-      if (!roomData.dayVotes) {
-        update(ref(db, `rooms/${currentRoomId}/dayResultText`), "大家皆未投票，今日無人出局。");
-        return;
-      }
-
-      let voteCounts = {};
-      Object.values(roomData.dayVotes).forEach(targetId => {
-        voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
-      });
-
-      let maxVotes = 0;
-      let topTargets = [];
-
-      for (let targetId in voteCounts) {
-        let count = voteCounts[targetId];
-        if (count > maxVotes) {
-          maxVotes = count;
-          topTargets = [targetId];
-        } else if (count === maxVotes) {
-          topTargets.push(targetId);
-        }
-      }
+      if (roomData.dayResultText) return; // 避免時間到 + 手動點擊重複結算
 
       let updates = {};
       let resultText = "";
+      let eliminatedId = null;
 
-      if (maxVotes <= 1 || topTargets.length > 1) {
-        resultText = `最高票數為 ${maxVotes} 票，但由於出現同票或票數不足，今日無人被淘汰！`;
+      if (!roomData.dayVotes || Object.keys(roomData.dayVotes).length === 0) {
+        resultText = "時間到，大家皆未投票，今日無人出局。";
       } else {
-        let eliminatedId = topTargets[0];
-        let eliminatedPlayer = roomData.players[eliminatedId];
-        updates[`rooms/${currentRoomId}/players/${eliminatedId}/isAlive`] = false;
-        resultText = `<b>${eliminatedPlayer ? eliminatedPlayer.name : '未知'}</b> 獲得最高票 (${maxVotes}票) 而不幸出局！`;
+        let voteCounts = {};
+        Object.values(roomData.dayVotes).forEach(targetId => {
+          voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
+        });
+
+        let maxVotes = 0;
+        let topTargets = [];
+        for (let targetId in voteCounts) {
+          let count = voteCounts[targetId];
+          if (count > maxVotes) {
+            maxVotes = count;
+            topTargets = [targetId];
+          } else if (count === maxVotes) {
+            topTargets.push(targetId);
+          }
+        }
+
+        if (maxVotes <= 1 || topTargets.length > 1) {
+          resultText = `最高票數為 ${maxVotes} 票，但由於出現同票或票數不足，今日無人被淘汰！`;
+        } else {
+          eliminatedId = topTargets[0];
+          let eliminatedPlayer = roomData.players[eliminatedId];
+          updates[`rooms/${currentRoomId}/players/${eliminatedId}/isAlive`] = false;
+          resultText = `<b>${eliminatedPlayer ? eliminatedPlayer.name : '未知'}</b> 獲得最高票 (${maxVotes}票) 而不幸出局！`;
+        }
       }
 
       updates[`rooms/${currentRoomId}/dayResultText`] = resultText;
+      updates[`rooms/${currentRoomId}/dayEliminatedId`] = eliminatedId;
       update(ref(db), updates);
     }
 
@@ -687,15 +782,21 @@
         'NIGHT_DOCTOR': '醫生行動',
         'NIGHT_WITCH': '女巫行動', 
         'NIGHT_END': '天亮結算',
-        'DAY_VOTE': '白天投票'
+        'DAY_VOTE': '白天投票',
+        'LAST_WORDS': '遺言時間'
       };
       return map[phase] || '未知';
     }
 
     window.voteAction = function(voteNode, targetId) {
       if (isSpectator) return alert("觀眾無法參與投票！");
-      set(ref(db, `rooms/${currentRoomId}/${voteNode}/${myPlayerId}`), targetId)
-        .catch(err => alert("投票失敗，請再試一次：" + err.message));
+      const path = `rooms/${currentRoomId}/${voteNode}/${myPlayerId}`;
+      const currentVote = latestRoomData && latestRoomData[voteNode] ? latestRoomData[voteNode][myPlayerId] : null;
+      if (currentVote === targetId) {
+        remove(ref(db, path)).catch(err => alert("撤回投票失敗，請再試一次：" + err.message));
+      } else {
+        set(ref(db, path), targetId).catch(err => alert("投票失敗，請再試一次：" + err.message));
+      }
     };
 
     window.confirmPolice = function(targetId) {
@@ -722,12 +823,16 @@
       if (isSpectator) return;
       localRoleFlipped = !localRoleFlipped;
       const card = document.getElementById('role-card');
-      if (card) card.innerText = localRoleFlipped ? "你的身分是：" + myRole : "點擊翻開卡片";
+      if (card) card.classList.toggle('flipped', localRoleFlipped);
     };
 
     window.adjustRole = function(role, change) {
       if (roleCounts[role] + change < 0) return;
       roleCounts[role] += change;
+      if (isHost && currentRoomId) {
+        set(ref(db, `rooms/${currentRoomId}/roleCounts/${role}`), roleCounts[role])
+          .catch(err => console.error(err));
+      }
       updateRoleSettingsUI();
     };
 
@@ -744,6 +849,7 @@
       const startBtn = document.getElementById('start-btn');
       if (isHost) {
         document.getElementById('host-role-settings').classList.remove('hidden');
+        document.getElementById('role-summary-readonly').classList.add('hidden');
         if (totalSelectedRoles === currentPlayersCount && currentPlayersCount > 0) {
           startBtn.disabled = false;
           startBtn.innerText = "身分相符，正式發牌！";
@@ -753,6 +859,14 @@
         }
       } else {
         document.getElementById('host-role-settings').classList.add('hidden');
+        document.getElementById('role-summary-readonly').classList.remove('hidden');
+        let listHtml = "";
+        for (let role in roleCounts) {
+          let info = roleInfo[role] || { icon: '❓' };
+          listHtml += `<div class="role-readonly-row"><span>${info.icon} ${role}</span><span class="badge">${roleCounts[role]}</span></div>`;
+        }
+        listHtml += `<p style="font-size:14px; color:#f39c12; margin-top:10px;">身分總數：${totalSelectedRoles} / 參賽玩家：${currentPlayersCount} 人</p>`;
+        document.getElementById('role-readonly-list').innerHTML = listHtml;
       }
     }
 
@@ -778,6 +892,7 @@
         updates[`rooms/${currentRoomId}/phase`] = 'CARD_REVEAL';
         updates[`rooms/${currentRoomId}/roleCounts`] = roleCounts;
         updates[`rooms/${currentRoomId}/witchState`] = { hasHeal: true, hasPoison: true };
+        updates[`rooms/${currentRoomId}/round`] = 1;
         update(ref(db), updates);
       }, { onlyOnce: true });
     };
@@ -798,7 +913,10 @@
           [`rooms/${currentRoomId}/lastNightDeaths`]: null,
           [`rooms/${currentRoomId}/witchState`]: null,
           [`rooms/${currentRoomId}/dayVotes`]: null,
-          [`rooms/${currentRoomId}/dayResultText`]: null
+          [`rooms/${currentRoomId}/dayResultText`]: null,
+          [`rooms/${currentRoomId}/dayEliminatedId`]: null,
+          [`rooms/${currentRoomId}/voteEndTime`]: null,
+          [`rooms/${currentRoomId}/round`]: null
         };
         for (let id in players) {
           updates[`rooms/${currentRoomId}/players/${id}/role`] = players[id].isSpectator ? "觀眾" : "未分配";
@@ -866,6 +984,10 @@
       <div class="role-setting"><span>🏹 獵人</span><div><button class="btn-counter" onclick="adjustRole('獵人', -1)">-</button><span id="count-獵人" class="badge">1</span><button class="btn-counter" onclick="adjustRole('獵人', 1)">+</button></div></div>
       <p id="role-summary" style="font-size:14px; color:#f39c12; font-weight:bold; margin-top:15px;"></p>
       <button id="start-btn" class="btn-danger" onclick="startGame()" disabled>等待人數與身分相符...</button>
+    </div>
+    <div id="role-summary-readonly" class="hidden">
+      <h3>⚙️ 目前身分設定</h3>
+      <div id="role-readonly-list"></div>
     </div>
   </div>
 
