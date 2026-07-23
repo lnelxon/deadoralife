@@ -933,30 +933,50 @@
 
         gameContent.innerHTML = html;
 
-        // 倒數計時：每個裝置都顯示，但只有房主端在時間到時觸發結算，避免重複寫入
+        // 倒數與「全員已決定」監聽：每個裝置都顯示倒數；房主在「時間到」或「全員已決定」時結算。
+        // 結算改在 interval 內用最新 latestRoomData 判斷，避免 render 當下用未同步的舊快照導致按鈕卡住。
         if (!roomData.dayResultText && voteTimerFor !== roomData.voteEndTime) {
           if (voteTimerInterval) clearInterval(voteTimerInterval);
           voteTimerFor = roomData.voteEndTime;
           dayVoteFinalizing = false;
           voteTimerInterval = setInterval(() => {
-            if (!latestRoomData || !latestRoomData.voteEndTime || latestRoomData.dayResultText) return;
+            if (!latestRoomData) return;
+            // 結果已公布 → 停止計時
+            if (latestRoomData.dayResultText) {
+              clearInterval(voteTimerInterval);
+              voteTimerInterval = null;
+              return;
+            }
+            // 房主：全員已決定 → 提早結算
+            if (isHost) {
+              let alive = 0, confirmed = 0;
+              Object.entries(latestRoomData.players || {}).forEach(([id, p]) => {
+                if (p.isSpectator) return;
+                if (p.isAlive) {
+                  alive++;
+                  if (latestRoomData.dayConfirmed && latestRoomData.dayConfirmed[id]) confirmed++;
+                }
+              });
+              if (alive > 0 && alive === confirmed && !dayVoteFinalizing) {
+                dayVoteFinalizing = true;
+                calculateDayVoteResult(latestRoomData);
+                return;
+              }
+            }
+            // 倒數顯示
+            if (!latestRoomData.voteEndTime) return;
             let left = Math.max(0, Math.ceil((latestRoomData.voteEndTime - Date.now()) / 1000));
             let el = document.getElementById('vote-timer-val');
             if (el) el.innerText = left;
             if (left <= 0) {
               clearInterval(voteTimerInterval);
               voteTimerInterval = null;
-              if (isHost && !latestRoomData.dayResultText) {
+              if (isHost && !latestRoomData.dayResultText && !dayVoteFinalizing) {
+                dayVoteFinalizing = true;
                 calculateDayVoteResult(latestRoomData);
               }
             }
           }, 500);
-        }
-
-        // 全員已決定 → 房主提早結算（用 fresh roomData 判斷，避免舊 closure）
-        if (isHost && !roomData.dayResultText && allConfirmed && !dayVoteFinalizing) {
-          dayVoteFinalizing = true;
-          calculateDayVoteResult(roomData);
         }
 
         if (isHost) {
@@ -1108,7 +1128,10 @@
         updates[`rooms/${currentRoomId}/winner`] = winner;
       }
 
-      update(ref(db), updates);
+      update(ref(db), updates).catch(err => {
+        console.error('白天投票結算寫入失敗：', err);
+        alert('投票結果寫入失敗，請再試一次：' + err.message);
+      });
     }
 
     function getPhaseName(phase) {
