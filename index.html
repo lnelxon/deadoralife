@@ -153,9 +153,9 @@
     #host-controls{position:fixed; top:14px; right:14px; z-index:100; display:flex; gap:8px;}
     #host-controls button{font-size:13px; padding:7px 13px; margin:0;}
 
-    .role-setting{display:flex; justify-content:space-between; align-items:center; margin:8px 0; background:rgba(8,8,14,0.6); padding:6px 15px; border-radius:8px; border:1px solid rgba(255,255,255,0.05);}
-    .btn-counter{background:linear-gradient(135deg,#3a6ea5,#26436b); width:34px; height:34px; font-weight:bold; border-radius:50%; padding:0; margin:0;}
-    .badge{background:linear-gradient(135deg,#d9b25a,#8a6d2f); color:#1a1206; padding:3px 10px; border-radius:11px; font-size:14px; font-weight:700;}
+    .role-setting{display:flex; justify-content:space-between; align-items:center; margin:3px 0; background:rgba(8,8,14,0.6); padding:3px 12px; border-radius:7px; border:1px solid rgba(255,255,255,0.05); font-size:15px;}
+    .btn-counter{background:linear-gradient(135deg,#3a6ea5,#26436b); width:30px; height:30px; font-weight:bold; border-radius:50%; padding:0; margin:0; font-size:15px;}
+    .badge{background:linear-gradient(135deg,#d9b25a,#8a6d2f); color:#1a1206; padding:2px 9px; border-radius:10px; font-size:13px; font-weight:700;}
 
     .player-slot{background:rgba(8,8,14,0.55); margin:6px 0; padding:10px 12px; border-radius:8px; text-align:left; border:1px solid rgba(255,255,255,0.05);}
     .slot-empty{color:var(--muted); font-style:italic;}
@@ -166,10 +166,14 @@
 
     .in-game-list{background:rgba(8,8,14,0.6); padding:13px 15px; border-radius:10px; margin-bottom:18px; text-align:left; border:1px solid rgba(255,255,255,0.05);}
     .in-game-list h4{margin:0 0 10px 0; color:var(--gold); letter-spacing:0.1em;}
-    .list-item{margin:7px 0; font-size:16px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:6px; display:flex; flex-wrap:wrap; align-items:center; gap:6px;}
+    .list-item{margin:6px 0; font-size:16px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:6px; display:flex; flex-wrap:wrap; align-items:center; gap:6px;}
+    .list-item.is-dead{opacity:0.72;}
+    .list-item.is-dead .pname{color:#7c7c88; text-decoration:line-through;}
     .pill{font-size:13px; padding:2px 9px; border-radius:11px; white-space:nowrap;}
     .pill-locked{background:rgba(46,204,113,0.18); color:#7be0a3; border:1px solid rgba(46,204,113,0.4);}
     .pill-vote{background:rgba(241,196,15,0.16); color:#f3d77a; border:1px solid rgba(241,196,15,0.35);}
+    .peek-btn{background:rgba(217,178,90,0.14); border:1px solid rgba(217,178,90,0.4); color:var(--gold); font-size:12px; padding:2px 8px; border-radius:8px; cursor:pointer; margin:0 0 0 2px; line-height:1.4;}
+    .peek-btn:hover{filter:brightness(1.2);}
 
     .flip-container{perspective:1000px; width:240px; height:320px; margin:25px auto;}
     .flip-card{position:relative; width:100%; height:100%; transition:transform 0.6s; transform-style:preserve-3d; cursor:pointer;}
@@ -186,7 +190,7 @@
     .vote-lock-banner{background:linear-gradient(135deg, rgba(46,204,113,0.22), rgba(30,132,73,0.18)); border:1px solid rgba(46,204,113,0.4); padding:12px; border-radius:10px; margin:12px 0; color:#9be8b8;}
     #role-summary-readonly{background:rgba(8,8,14,0.55); padding:12px; border-radius:8px; margin-top:10px; border:1px solid rgba(255,255,255,0.05);}
     #role-readonly-list{text-align:left; max-width:260px; margin:0 auto;}
-    .role-readonly-row{display:flex; justify-content:space-between; padding:5px 0;}
+    .role-readonly-row{display:flex; justify-content:space-between; padding:2px 0;}
 
     .decide-bar{position:sticky; bottom:0; background:linear-gradient(180deg, rgba(10,10,15,0.2), rgba(10,10,15,0.96)); padding:14px 0 4px; margin-top:10px;}
 
@@ -238,6 +242,10 @@
     let voteTimerInterval = null;
     let voteTimerFor = null;
     let dayVoteFinalizing = false;
+    let wolfAutoAdvancing = false;
+    let wolfAutoRound = null;
+    let hostPeekIds = new Set();
+    let lastActivePlayers = [];
 
     const roleInfo = {
       "狼人": { icon: "🐺", color: "linear-gradient(135deg,#c0392b,#7b241c)", desc: "每晚與狼隊友一起選擇一位玩家殺害" },
@@ -260,7 +268,7 @@
       if (!name) return alert("請輸入暱稱");
       if (!maxLimit || maxLimit < 1) return alert("請輸入有效的玩家人數上限");
 
-      currentRoomId = Math.floor(10000 + Math.random() * 90000).toString();
+      currentRoomId = Math.floor(100 + Math.random() * 900).toString();
       myPlayerId = "p_" + Math.random().toString(36).substr(2, 9);
       isHost = true;
       isSpectator = false;
@@ -316,18 +324,44 @@
       }
     };
 
-    function generatePlayerListHTML(activePlayers, voteCounts, confirmedSet) {
+    function rolePillStyle(role) {
+      const map = {
+        "狼人": "background:rgba(183,28,28,0.22);color:#f29292;border:1px solid rgba(183,28,28,0.55);",
+        "警察": "background:rgba(58,110,165,0.24);color:#9bc4ec;border:1px solid rgba(58,110,165,0.55);",
+        "平民": "background:rgba(46,204,113,0.22);color:#86e6ab;border:1px solid rgba(46,204,113,0.5);",
+        "醫生": "background:rgba(39,174,96,0.22);color:#7dd99a;border:1px solid rgba(39,174,96,0.5);",
+        "女巫": "background:rgba(142,68,173,0.24);color:#d6a3ec;border:1px solid rgba(142,68,173,0.55);",
+        "獵人": "background:rgba(211,84,0,0.24);color:#f3ab6b;border:1px solid rgba(211,84,0,0.55);",
+        "觀眾": "background:rgba(149,165,166,0.2);color:#c4cfcf;border:1px solid rgba(149,165,166,0.4);"
+      };
+      return map[role] || "background:rgba(217,178,90,0.18);color:#e6cf8a;border:1px solid rgba(217,178,90,0.4);";
+    }
+
+    function generatePlayerListHTML(activePlayers, voteCounts, confirmedSet, hideRoles) {
       let html = `<div class="in-game-list"><h4>📋 玩家名單</h4>`;
       activePlayers.forEach(p => {
         let status = p.isAlive ? "🟢" : "💀";
+        let deadCls = p.isAlive ? "" : "is-dead";
         let roleStr = "";
         if (!p.isAlive) {
           let info = roleInfo[p.role] || {};
-          roleStr = `<span class="pill" style="background:rgba(183,28,28,0.18);color:#e89a9a;border:1px solid rgba(183,28,28,0.4);">${info.icon || ''} ${p.role}</span>`;
-        } else if (p.id === myPlayerId) {
-          roleStr = `<span class="pill" style="background:rgba(217,178,90,0.18);color:#e6cf8a;border:1px solid rgba(217,178,90,0.4);">你 · ${myRole}</span>`;
-        } else if (myRole && p.role === myRole && !['平民', '未分配', '觀眾'].includes(myRole)) {
-          roleStr = `<span class="pill" style="background:rgba(142,68,173,0.2);color:#d7a9e8;border:1px solid rgba(142,68,173,0.4);">同伴 · ${p.role}</span>`;
+          roleStr = `<span class="pill" style="${rolePillStyle(p.role)}">${info.icon || ''} ${p.role}</span>`;
+        } else if (!hideRoles) {
+          let info = roleInfo[myRole] || {};
+          if (p.id === myPlayerId) {
+            roleStr = `<span class="pill" style="${rolePillStyle(myRole)}">${info.icon||''} 你 · ${myRole}</span>`;
+          } else if (myRole && p.role === myRole && !['平民', '未分配', '觀眾'].includes(myRole)) {
+            let pInfo = roleInfo[p.role] || {};
+            roleStr = `<span class="pill" style="${rolePillStyle(p.role)}">${pInfo.icon||''} 同伴 · ${p.role}</span>`;
+          }
+        }
+        let peekStr = "";
+        if (isHost && p.role && !['未分配', '觀眾'].includes(p.role)) {
+          if (hostPeekIds.has(p.id)) {
+            let info = roleInfo[p.role] || {};
+            peekStr = `<span class="pill" style="${rolePillStyle(p.role)}">👁 ${info.icon||''} ${p.role}</span>`;
+          }
+          peekStr += ` <button class="peek-btn" onclick="hostPeek('${p.id}')">${hostPeekIds.has(p.id) ? '隱藏' : '👁 查'}</button>`;
         }
         let extra = "";
         if (voteCounts && p.isAlive) {
@@ -337,7 +371,7 @@
         if (confirmedSet && confirmedSet[p.id] && p.isAlive) {
           extra += `<span class="pill pill-locked">🔒 已決定</span>`;
         }
-        html += `<div class="list-item">${status} <b>${p.name}</b> ${roleStr}${extra}</div>`;
+        html += `<div class="list-item ${deadCls}">${status} <b class="pname">${p.name}</b> ${roleStr}${peekStr}${extra}</div>`;
       });
       html += `</div>`;
       return html;
@@ -387,6 +421,7 @@
         phase: 'NIGHT_WOLF',
         round: round,
         wolfVotes: null,
+        wolfLocked: null,
         policeVotes: null,
         policeResult: null,
         doctorTarget: null,
@@ -431,6 +466,7 @@
           });
         }
         currentPlayersCount = activePlayers.length;
+        lastActivePlayers = activePlayers;
 
         if (roomData.phase === 'LOBBY') {
           document.getElementById('lobby-area').classList.remove('hidden');
@@ -477,7 +513,8 @@
       hostControls.classList.add('hidden');
 
       const isVote = roomData.phase === 'DAY_VOTE';
-      let baseHTML = generatePlayerListHTML(activePlayers, isVote ? computeVoteCounts(roomData.dayVotes) : null, isVote ? (roomData.dayConfirmed || null) : null);
+      const hideRoles = (roomData.phase === 'CARD_REVEAL' && !localRoleFlipped);
+      let baseHTML = generatePlayerListHTML(activePlayers, isVote ? computeVoteCounts(roomData.dayVotes) : null, isVote ? (roomData.dayConfirmed || null) : null, hideRoles);
 
       if (roomData.phase !== 'DAY_VOTE' && voteTimerInterval) {
         clearInterval(voteTimerInterval);
@@ -497,12 +534,21 @@
         if (roomData.dayResultText) {
           recapHtml += `<div>🗳️ ${roomData.dayResultText}</div>`;
         }
+        // 身分大公開
+        let rosterHtml = activePlayers.map(p => {
+          let info = roleInfo[p.role] || {};
+          let st = p.isAlive ? '🟢' : '💀';
+          let deadCls = p.isAlive ? '' : 'is-dead';
+          return `<div class="list-item ${deadCls}">${st} <b class="pname">${p.name}</b> <span class="pill" style="${rolePillStyle(p.role)}">${info.icon || ''} ${p.role}</span></div>`;
+        }).join('');
+        let rosterBlock = `<div class="in-game-list"><h4>🎭 身分大公開</h4>${rosterHtml}</div>`;
         gameContent.innerHTML = baseHTML + `
           <div class="card gameover-box">
             <div class="winner-sub">END OF THE HUNT</div>
             <div class="winner-title ${isWolfWin ? 'winner-wolf' : 'winner-civ'}">${isWolfWin ? '🐺 狼人勝利' : '🌾 平民勝利'}</div>
             <p style="color:var(--bone-dim); margin:6px 0 12px;">${isWolfWin ? '所有平民已被獵殺殆盡，黑夜吞噬了村莊。' : '狼人全數伏誅，村莊迎來了黎明。'}</p>
             ${recapHtml ? `<div class="death-recap">${recapHtml}</div>` : ''}
+            ${rosterBlock}
           </div>`;
         if (isHost) {
           hostControls.classList.remove('hidden');
@@ -567,7 +613,10 @@
         if (isDead) {
           html += `<h2>👻 你已死亡，請安靜觀戰</h2>`;
         } else if (myRole === '狼人') {
-          html += `<h2>🐺 狼人行動 (第 ${roomData.round || 1} 夜)</h2><p style="color:#e23b3b;">請選擇你要殺害的對象：</p>`;
+          const locked = !!(roomData.wolfLocked && roomData.wolfLocked[myPlayerId]);
+          let aliveWolves = activePlayers.filter(p => p.role === '狼人' && p.isAlive);
+          let lockedCount = aliveWolves.filter(w => roomData.wolfLocked && roomData.wolfLocked[w.id]).length;
+          html += `<h2>🐺 狼人行動 (第 ${roomData.round || 1} 夜)</h2><p style="color:#e23b3b;">請選擇要殺害的對象，選好後按下「確認鎖定」：</p>`;
           activePlayers.filter(p => p.isAlive && p.role !== '狼人').forEach(p => {
             let voteCount = 0;
             let isMyTarget = false;
@@ -580,10 +629,22 @@
               });
             }
             let wolfIcons = '🐺'.repeat(voteCount);
-            html += `<button class="target-btn ${isMyTarget ? 'btn-danger' : 'btn-secondary'}" onclick="voteAction('wolfVotes', '${p.id}')">
+            let btnClass = isMyTarget ? 'btn-danger' : 'btn-secondary';
+            let disAttr = locked ? 'disabled' : '';
+            html += `<button class="target-btn ${btnClass}" ${disAttr} onclick="voteAction('wolfVotes', '${p.id}')">
                       ${p.name} ${isMyTarget ? '🎯 (你選他)' : ''} ${wolfIcons}
                      </button>`;
           });
+          if (locked) {
+            let myVote = roomData.wolfVotes && roomData.wolfVotes[myPlayerId];
+            let tName = myVote ? (roomData.players[myVote]?.name || '某玩家') : '未選擇';
+            html += `<div class="vote-lock-banner">🔒 你已鎖定擊殺目標：<b>${tName}</b><br>等待狼隊全數鎖定同一目標... (${lockedCount}/${aliveWolves.length})</div>`;
+            html += `<div class="decide-bar"><button class="btn-ghost" style="width:92%; font-size:16px; padding:11px;" onclick="cancelWolfLock()">↩️ 取消鎖定，重新選擇</button></div>`;
+          } else {
+            let myVote = roomData.wolfVotes && roomData.wolfVotes[myPlayerId];
+            let label = myVote ? '🔒 確認鎖定目標' : '🔒 確認鎖定（請先選擇目標）';
+            html += `<div class="decide-bar"><button class="btn-gold" style="width:92%; font-size:18px; padding:13px;" onclick="confirmWolfLock()">${label}</button></div>`;
+          }
         } else {
           html += `<h2>🌙 夜晚降臨 (第 ${roomData.round || 1} 夜)</h2><p style="font-size:22px; margin: 30px 0;">狼人行動中，請閉眼稍候...</p>`;
         }
@@ -592,32 +653,16 @@
         if (isHost) {
           hostControls.classList.remove('hidden');
           let aliveWolves = activePlayers.filter(p => p.role === '狼人' && p.isAlive);
-          let targetToKill = checkAgreedTarget(aliveWolves, roomData.wolfVotes);
-
-          if (targetToKill) {
-            btnHostNext.innerText = "下一步";
-            btnHostNext.disabled = false;
-            btnHostNext.onclick = () => {
-              let updates = {};
-              if (targetToKill !== 'NO_ALIVE') updates[`rooms/${currentRoomId}/killedByWolf`] = targetToKill;
-
-              if (hasRoleInGame(roomData, '警察')) {
-                updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_POLICE';
-              } else if (hasRoleInGame(roomData, '醫生')) {
-                updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_DOCTOR';
-              } else if (hasRoleInGame(roomData, '女巫')) {
-                updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
-              } else {
-                calculateNightEndViaData(roomData, updates);
-                update(ref(db), updates);
-                return;
-              }
-              update(ref(db), updates);
-            };
-          } else {
-            btnHostNext.innerText = "等待狼人獵殺一人...";
-            btnHostNext.disabled = true;
+          let allLocked = aliveWolves.length > 0 && aliveWolves.every(w => roomData.wolfLocked && roomData.wolfLocked[w.id]);
+          let agreed = checkAgreedTarget(aliveWolves, roomData.wolfVotes);
+          if (roomData.round !== wolfAutoRound) { wolfAutoRound = roomData.round; wolfAutoAdvancing = false; }
+          if (allLocked && agreed && agreed !== 'NO_ALIVE' && !wolfAutoAdvancing) {
+            wolfAutoAdvancing = true;
+            advanceFromWolf(roomData, agreed);
           }
+          btnHostNext.innerText = "⚡ 強制下一步（無人被殺）";
+          btnHostNext.disabled = false;
+          btnHostNext.onclick = () => advanceFromWolf(roomData, null);
         }
       }
       // --- 4. 夜晚：警察回合 ---
@@ -956,6 +1001,28 @@
       }
     }
 
+    // 狼人回合推進：targetId 有值則記錄擊殺目標，null 表示強制無人被殺
+    function advanceFromWolf(roomData, targetId) {
+      let updates = {};
+      const effectiveKilledByWolf = targetId || null;
+      updates[`rooms/${currentRoomId}/killedByWolf`] = effectiveKilledByWolf;
+      // 計算結算時需讀到有效值（updates 尚未寫回 DB）
+      const effectiveRoomData = { ...roomData, killedByWolf: effectiveKilledByWolf };
+
+      if (hasRoleInGame(roomData, '警察')) {
+        updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_POLICE';
+      } else if (hasRoleInGame(roomData, '醫生')) {
+        updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_DOCTOR';
+      } else if (hasRoleInGame(roomData, '女巫')) {
+        updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
+      } else {
+        calculateNightEndViaData(effectiveRoomData, updates);
+        update(ref(db), updates);
+        return;
+      }
+      update(ref(db), updates);
+    }
+
     function calculateNightEndViaData(roomData, updates) {
       let deaths = [];
       let killedByWolf = roomData.killedByWolf;
@@ -1066,6 +1133,10 @@
       if (voteNode === 'dayVotes' && latestRoomData && latestRoomData.dayConfirmed && latestRoomData.dayConfirmed[myPlayerId]) {
         return alert("你已按下「決定」鎖定，請先取消決定才能更改投票。");
       }
+      // 狼人已鎖定則不允許改選
+      if (voteNode === 'wolfVotes' && latestRoomData && latestRoomData.wolfLocked && latestRoomData.wolfLocked[myPlayerId]) {
+        return alert("你已鎖定擊殺目標，請先取消鎖定才能更改。");
+      }
       const path = `rooms/${currentRoomId}/${voteNode}/${myPlayerId}`;
       const currentVote = latestRoomData && latestRoomData[voteNode] ? latestRoomData[voteNode][myPlayerId] : null;
       if (currentVote === targetId) {
@@ -1073,6 +1144,26 @@
       } else {
         set(ref(db, path), targetId).catch(err => alert("投票失敗，請再試一次：" + err.message));
       }
+    };
+
+    window.confirmWolfLock = function() {
+      if (isSpectator || myRole !== '狼人') return;
+      let myVote = latestRoomData && latestRoomData.wolfVotes ? latestRoomData.wolfVotes[myPlayerId] : null;
+      if (!myVote) return alert("請先選擇要擊殺的對象再鎖定。");
+      set(ref(db, `rooms/${currentRoomId}/wolfLocked/${myPlayerId}`), true)
+        .catch(err => alert("鎖定失敗，請再試一次：" + err.message));
+    };
+
+    window.cancelWolfLock = function() {
+      if (isSpectator) return;
+      remove(ref(db, `rooms/${currentRoomId}/wolfLocked/${myPlayerId}`))
+        .catch(err => alert("取消失敗，請再試一次：" + err.message));
+    };
+
+    window.hostPeek = function(id) {
+      if (!isHost) return;
+      if (hostPeekIds.has(id)) hostPeekIds.delete(id); else hostPeekIds.add(id);
+      if (latestRoomData) renderGamePhase(latestRoomData, lastActivePlayers);
     };
 
     window.confirmDayVote = function() {
@@ -1110,8 +1201,7 @@
     window.toggleRole = function() {
       if (isSpectator) return;
       localRoleFlipped = !localRoleFlipped;
-      const card = document.getElementById('role-card');
-      if (card) card.classList.toggle('flipped', localRoleFlipped);
+      if (latestRoomData) renderGamePhase(latestRoomData, lastActivePlayers);
     };
 
     window.adjustRole = function(role, change) {
@@ -1194,6 +1284,7 @@
         let updates = {
           [`rooms/${currentRoomId}/phase`]: 'LOBBY',
           [`rooms/${currentRoomId}/wolfVotes`]: null,
+          [`rooms/${currentRoomId}/wolfLocked`]: null,
           [`rooms/${currentRoomId}/policeVotes`]: null,
           [`rooms/${currentRoomId}/policeResult`]: null,
           [`rooms/${currentRoomId}/doctorTarget`]: null,
@@ -1258,7 +1349,7 @@
     </div>
     <div id="join-room-form" class="hidden">
       <h3>🔑 加入房間</h3>
-      <input type="number" id="joinRoomId" placeholder="輸入 5 位數字房間代碼"><br>
+      <input type="number" id="joinRoomId" placeholder="輸入 3 位數字房間代碼"><br>
       <input type="text" id="joinName" placeholder="輸入您的暱稱"><br><br>
       <button class="btn-secondary" onclick="joinRoom()">加入</button>
       <button class="btn-ghost" onclick="showHomeMenu()">返回</button>
