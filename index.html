@@ -289,8 +289,8 @@
         if (isDead) {
           html += `<h2>👻 你已死亡，請安靜觀戰</h2>`;
         } else if (myRole === '狼人') {
-          html += `<h2>🐺 狼人行動</h2><p style="color:#e74c3c;">請選擇你要殺害的對象：</p>`;
-          activePlayers.filter(p => p.isAlive).forEach(p => {
+          html += `<h2>🐺 狼人行動</h2><p style="color:#e74c3c;">請選擇你要殺害的對象 (不可選擇狼人隊友)：</p>`;
+          activePlayers.filter(p => p.isAlive && p.role !== '狼人').forEach(p => {
             let voteCount = 0;
             let isMyTarget = false;
             if (roomData.wolfVotes) {
@@ -694,16 +694,19 @@
 
     window.voteAction = function(voteNode, targetId) {
       if (isSpectator) return alert("觀眾無法參與投票！");
-      update(ref(db, `rooms/${currentRoomId}/${voteNode}/${myPlayerId}`), targetId);
+      set(ref(db, `rooms/${currentRoomId}/${voteNode}/${myPlayerId}`), targetId)
+        .catch(err => alert("投票失敗，請再試一次：" + err.message));
     };
 
     window.confirmPolice = function(targetId) {
-      update(ref(db, `rooms/${currentRoomId}/policeResult`), targetId);
+      set(ref(db, `rooms/${currentRoomId}/policeResult`), targetId)
+        .catch(err => alert("確認失敗，請再試一次：" + err.message));
     };
 
     window.doctorAction = function(targetId) {
       if (isSpectator) return;
-      update(ref(db, `rooms/${currentRoomId}/doctorTarget`), targetId);
+      set(ref(db, `rooms/${currentRoomId}/doctorTarget`), targetId)
+        .catch(err => alert("選擇失敗，請再試一次：" + err.message));
     };
 
     window.witchAction = function(type, targetId) {
