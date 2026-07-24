@@ -193,7 +193,6 @@
 
     .confirm-ok-banner{background:rgba(8,8,14,0.6); border:1px solid rgba(217,178,90,0.3); border-radius:10px; padding:10px 14px; margin:12px 0; font-size:14px; color:var(--bone-dim);}
     #leave-btn{position:fixed; top:14px; left:14px; z-index:100; font-size:13px; padding:7px 13px; margin:0;}
-  </style>
 
     .flip-container{perspective:1000px; width:240px; height:320px; margin:25px auto;}
     .flip-card{position:relative; width:100%; height:100%; transition:transform 0.6s; transform-style:preserve-3d; cursor:pointer;}
@@ -821,7 +820,7 @@
         return;
       }
 
-      if (isSpectator) {
+      if (isSpectator && !isHost) {
         let html = baseHTML + `<div class="card" style="background:#2a2a36;">👁️ 您目前為觀眾席，無法參與遊戲操作<br>目前階段：${getPhaseName(roomData.phase)}</div>`;
 
         if (roomData.phase === 'DAY_DISCUSS') {
@@ -838,30 +837,55 @@
         restoreChatDrafts();
         return;
       }
+      // 房主即使坐在觀眾席，也要能繼續往下走到各回合的房主控制按鈕（不能在這裡 return）
 
       // --- 1. 確認身分階段 ---
       if (roomData.phase === 'CARD_REVEAL') {
-        let info = roleInfo[myRole] || { icon: '❓', color: '#555', desc: '' };
-        gameContent.innerHTML = baseHTML + `
-          <h2>🃏 請確認你的身分</h2>
-          <div class="flip-container">
-            <div class="flip-card ${localRoleFlipped ? 'flipped' : ''}" id="role-card" onclick="toggleRole()">
-              <div class="flip-face flip-front">
-                <div class="moon">🌙</div>
-                <p style="margin-top:15px; font-size:16px; color:var(--gold);">點擊翻牌查看身分</p>
+        if (isSpectator) {
+          gameContent.innerHTML = baseHTML + `<div class="card" style="background:#2a2a36;">👁️ 您目前為觀眾席，正在等待所有玩家確認身分...</div>`;
+        } else {
+          let info = roleInfo[myRole] || { icon: '❓', color: '#555', desc: '' };
+          let confirmedSet = roomData.cardConfirmed || {};
+          let iConfirmed = !!confirmedSet[myPlayerId];
+          let html = baseHTML + `
+            <h2>🃏 請確認你的身分</h2>
+            <div class="flip-container">
+              <div class="flip-card ${localRoleFlipped ? 'flipped' : ''}" id="role-card" onclick="toggleRole()">
+                <div class="flip-face flip-front">
+                  <div class="moon">🌙</div>
+                  <p style="margin-top:15px; font-size:16px; color:var(--gold);">點擊翻牌查看身分</p>
+                </div>
+                <div class="flip-face flip-back" style="background:${info.color};">
+                  <div class="role-icon">${info.icon}</div>
+                  <div class="role-name">${myRole}</div>
+                  <div class="role-desc">${info.desc}</div>
+                </div>
               </div>
-              <div class="flip-face flip-back" style="background:${info.color};">
-                <div class="role-icon">${info.icon}</div>
-                <div class="role-name">${myRole}</div>
-                <div class="role-desc">${info.desc}</div>
-              </div>
-            </div>
-          </div>`;
+            </div>`;
+          if (iConfirmed) {
+            html += `<p style="color:#7be0a3; font-size:16px; margin-top:10px;">✅ 你已確認身分，等待其他人...</p>`;
+          } else if (localRoleFlipped) {
+            html += `<div class="decide-bar"><button class="btn-gold" style="width:92%; font-size:18px; padding:13px;" onclick="confirmCardSeen()">✅ 我已確認身分</button></div>`;
+          } else {
+            html += `<p style="color:var(--bone-dim); font-size:14px; margin-top:10px;">請先點擊卡片翻牌，再按下方按鈕確認</p>`;
+          }
+          gameContent.innerHTML = html;
+        }
+        restoreChatDrafts();
+
+        const nonSpecIds = Object.entries(roomData.players || {}).filter(([id, p]) => !p.isSpectator).map(([id]) => id);
+        const confirmedCount = nonSpecIds.filter(id => (roomData.cardConfirmed || {})[id]).length;
+        const allConfirmed = nonSpecIds.length > 0 && confirmedCount === nonSpecIds.length;
 
         if (isHost) {
           hostControls.classList.remove('hidden');
-          btnHostNext.innerText = "遊戲開始";
-          btnHostNext.disabled = false;
+          if (allConfirmed) {
+            btnHostNext.innerText = "🌙 遊戲開始";
+            btnHostNext.disabled = false;
+          } else {
+            btnHostNext.innerText = `等待所有人確認身分 (${confirmedCount}/${nonSpecIds.length})`;
+            btnHostNext.disabled = true;
+          }
           btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), {
             phase: 'DAY_DISCUSS',
             discussNext: 'NIGHT_WOLF',
@@ -913,7 +937,7 @@
       }
       // --- 3. 夜晚：狼人回合 ---
       else if (roomData.phase === 'NIGHT_WOLF') {
-        let isDead = !roomData.players[myPlayerId].isAlive;
+        let isDead = !roomData.players[myPlayerId].isAlive || isSpectator;
         let html = baseHTML;
 
         if (isDead) {
@@ -1001,7 +1025,7 @@
       }
       // --- 4. 夜晚：警察回合 ---
       else if (roomData.phase === 'NIGHT_POLICE') {
-        let isDead = !roomData.players[myPlayerId].isAlive;
+        let isDead = !roomData.players[myPlayerId].isAlive || isSpectator;
         let html = baseHTML;
 
         if (isDead) {
@@ -1093,7 +1117,7 @@
       }
       // --- 4.5 夜晚：醫生回合 ---
       else if (roomData.phase === 'NIGHT_DOCTOR') {
-        let isDead = !roomData.players[myPlayerId].isAlive;
+        let isDead = !roomData.players[myPlayerId].isAlive || isSpectator;
         let html = baseHTML;
 
         if (isDead) {
@@ -1168,7 +1192,7 @@
       }
       // --- 5. 夜晚：女巫回合 ---
       else if (roomData.phase === 'NIGHT_WITCH') {
-        let isDead = !roomData.players[myPlayerId].isAlive;
+        let isDead = !roomData.players[myPlayerId].isAlive || isSpectator;
         let html = baseHTML;
 
         if (isDead) {
@@ -1301,7 +1325,7 @@
       }
       // --- 7. 白天投票放逐階段 ---
       else if (roomData.phase === 'DAY_VOTE') {
-        let isDead = !roomData.players[myPlayerId].isAlive;
+        let isDead = !roomData.players[myPlayerId].isAlive || isSpectator;
         let html = baseHTML;
         let remaining = roomData.voteEndTime ? Math.max(0, Math.ceil((roomData.voteEndTime - Date.now()) / 1000)) : 30;
 
@@ -1454,8 +1478,8 @@
         }
         html += renderChatBox('🕯️ 遺言紀錄', '', roomData.lastWordsLog || [], lwInput);
 
-        let isDeadNotSpec = !isSpectator && roomData.players[myPlayerId] && !roomData.players[myPlayerId].isAlive;
-        if (isDeadNotSpec) html += afterlifeChatFragment(roomData);
+        let showAfterlife = (isSpectator && isHost) || (!isSpectator && roomData.players[myPlayerId] && !roomData.players[myPlayerId].isAlive);
+        if (showAfterlife) html += afterlifeChatFragment(roomData);
 
         gameContent.innerHTML = html;
         restoreChatDrafts();
@@ -1487,6 +1511,13 @@
           .catch(err => alert("推進失敗，請再試一次：" + err.message));
       }
     }
+
+    window.confirmCardSeen = function() {
+      if (isSpectator) return;
+      if (!localRoleFlipped) return alert("請先翻牌查看身分");
+      set(ref(db, `rooms/${currentRoomId}/cardConfirmed/${myPlayerId}`), true)
+        .catch(err => alert("確認失敗，請再試一次：" + err.message));
+    };
 
     window.confirmNightEnd = function() {
       if (isSpectator) return;
@@ -1889,6 +1920,7 @@
           }
         });
         updates[`rooms/${currentRoomId}/phase`] = 'CARD_REVEAL';
+        updates[`rooms/${currentRoomId}/cardConfirmed`] = null;
         updates[`rooms/${currentRoomId}/roleCounts`] = roleCounts;
         updates[`rooms/${currentRoomId}/witchState`] = { hasHeal: true, hasPoison: true };
         updates[`rooms/${currentRoomId}/doctorState`] = { needsLeft: 2 };
@@ -1937,7 +1969,8 @@
           [`rooms/${currentRoomId}/witchEndTime`]: null,
           [`rooms/${currentRoomId}/roleChat`]: null,
           [`rooms/${currentRoomId}/afterlifeChat`]: null,
-          [`rooms/${currentRoomId}/lastWordsLog`]: null
+          [`rooms/${currentRoomId}/lastWordsLog`]: null,
+          [`rooms/${currentRoomId}/cardConfirmed`]: null
         };
         for (let id in players) {
           updates[`rooms/${currentRoomId}/players/${id}/role`] = players[id].isSpectator ? "觀眾" : "未分配";
