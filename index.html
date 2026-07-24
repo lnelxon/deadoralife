@@ -164,9 +164,10 @@
     #phase-host-controls{margin-top:20px; padding-top:16px; border-top:1px dashed rgba(217,178,90,0.3);}
     .target-btn{display:block; width:92%; margin:9px auto; font-size:18px; text-align:left; padding:12px 16px;}
 
-    .in-game-list{background:rgba(8,8,14,0.6); padding:13px 15px; border-radius:10px; margin-bottom:18px; text-align:left; border:1px solid rgba(255,255,255,0.05);}
-    .in-game-list h4{margin:0 0 10px 0; color:var(--gold); letter-spacing:0.1em;}
-    .list-item{margin:6px 0; font-size:16px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:6px; display:flex; flex-wrap:wrap; align-items:center; gap:6px;}
+    .in-game-list{background:rgba(8,8,14,0.6); padding:16px 18px; border-radius:12px; margin-bottom:18px; text-align:left; border:1px solid rgba(255,255,255,0.08);}
+    .in-game-list h4{margin:0 0 12px 0; color:var(--gold); letter-spacing:0.12em; font-size:17px;}
+    .list-item{margin:9px 0; font-size:19px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:9px; display:flex; flex-wrap:wrap; align-items:center; gap:7px;}
+    .list-item .pname{font-size:19px; font-weight:900;}
     .list-item.is-dead{opacity:0.72;}
     .list-item.is-dead .pname{color:#7c7c88; text-decoration:line-through;}
     .pill{font-size:13px; padding:2px 9px; border-radius:11px; white-space:nowrap;}
@@ -174,6 +175,25 @@
     .pill-vote{background:rgba(241,196,15,0.16); color:#f3d77a; border:1px solid rgba(241,196,15,0.35);}
     .peek-btn{background:rgba(217,178,90,0.14); border:1px solid rgba(217,178,90,0.4); color:var(--gold); font-size:12px; padding:2px 8px; border-radius:8px; cursor:pointer; margin:0 0 0 2px; line-height:1.4;}
     .peek-btn:hover{filter:brightness(1.2);}
+    .kick-btn{background:rgba(183,28,28,0.16); border:1px solid rgba(183,28,28,0.5); color:#f29292; font-size:12px; padding:2px 8px; border-radius:8px; cursor:pointer; margin:0;}
+
+    /* 聊天面板 */
+    .chat-box{background:rgba(8,8,14,0.6); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px 14px; margin:14px 0; text-align:left;}
+    .chat-box h4{margin:0 0 8px; color:var(--gold); font-size:15px; letter-spacing:0.08em;}
+    .chat-log{max-height:220px; overflow-y:auto; margin-bottom:10px;}
+    .chat-msg{font-size:15px; margin:6px 0; line-height:1.5; word-break:break-word;}
+    .chat-msg .who{color:var(--gold); font-weight:700; margin-right:4px;}
+    .chat-empty{color:var(--muted); font-size:14px; font-style:italic;}
+    .chat-input-row{display:flex; gap:8px;}
+    .chat-input-row input{flex:1; margin:0; width:auto;}
+    .chat-input-row button{margin:0; padding:11px 16px; white-space:nowrap;}
+    .afterlife-box{border-color:rgba(142,68,173,0.4);}
+    .afterlife-box h4{color:#d6a3ec;}
+    .role-chat-box{border-color:rgba(183,28,28,0.35);}
+
+    .confirm-ok-banner{background:rgba(8,8,14,0.6); border:1px solid rgba(217,178,90,0.3); border-radius:10px; padding:10px 14px; margin:12px 0; font-size:14px; color:var(--bone-dim);}
+    #leave-btn{position:fixed; top:14px; left:14px; z-index:100; font-size:13px; padding:7px 13px; margin:0;}
+  </style>
 
     .flip-container{perspective:1000px; width:240px; height:320px; margin:25px auto;}
     .flip-card{position:relative; width:100%; height:100%; transition:transform 0.6s; transform-style:preserve-3d; cursor:pointer;}
@@ -212,7 +232,7 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getDatabase, ref, set, onValue, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { getDatabase, ref, set, onValue, update, remove, push } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyB4_tS-4ubsozDX8i_74OueH9dOELyquw4",
@@ -250,6 +270,11 @@
     let wolfTimerFor = null;
     let hostPeekIds = new Set();
     let lastActivePlayers = [];
+    let subTimerInterval = null;
+    let subTimerKey = null;
+    let discussTimerInterval = null;
+    let discussTimerFor = null;
+    let lastRenderedPhase = null;
 
     const roleInfo = {
       "狼人": { icon: "🐺", color: "linear-gradient(135deg,#c0392b,#7b241c)", desc: "每晚與狼隊友一起選擇一位玩家殺害" },
@@ -317,15 +342,34 @@
     };
 
     window.toggleSeat = function(wantsToBeSpectator) {
-      if (wantsToBeSpectator && isHost) {
-        return alert("房主需留在遊戲列才能推進遊戲流程，無法轉為觀眾。");
-      }
       if (wantsToBeSpectator) {
         update(ref(db, `rooms/${currentRoomId}/players/${myPlayerId}`), { isSpectator: true, role: "觀眾" });
       } else {
         if (currentPlayersCount >= maxPlayersLimit) return alert("座位已滿，無法加入！");
         update(ref(db, `rooms/${currentRoomId}/players/${myPlayerId}`), { isSpectator: false, role: "未分配" });
       }
+    };
+
+    // 離開房間：把自己從玩家名單移除，回到首頁。房主離開視同關閉房間。
+    window.leaveRoom = function() {
+      if (isHost) {
+        if (!confirm("你是房主，離開將直接關閉整個房間，所有人會被踢回首頁。確定要離開嗎？")) return;
+        remove(ref(db, 'rooms/' + currentRoomId));
+        location.reload();
+        return;
+      }
+      if (!confirm("確定要離開房間嗎？")) return;
+      remove(ref(db, `rooms/${currentRoomId}/players/${myPlayerId}`))
+        .finally(() => location.reload());
+    };
+
+    // 房主踢出玩家（僅限大廳）
+    window.kickPlayer = function(id) {
+      if (!isHost) return;
+      if (id === myPlayerId) return;
+      if (!confirm("確定要將此玩家踢出房間嗎？")) return;
+      remove(ref(db, `rooms/${currentRoomId}/players/${id}`))
+        .catch(err => alert("踢出失敗，請再試一次：" + err.message));
     };
 
     function rolePillStyle(role) {
@@ -387,6 +431,126 @@
       return counts;
     }
 
+    // 通用 30 秒／90 秒倒數：key 相同時不重複建立 interval；時間到時（只有房主）呼叫 onExpire。
+    function startSubTimer(key, endTime, elId, onExpire) {
+      if (subTimerKey === key) return;
+      if (subTimerInterval) { clearInterval(subTimerInterval); subTimerInterval = null; }
+      subTimerKey = key;
+      let fired = false;
+      subTimerInterval = setInterval(() => {
+        let left = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+        let el = document.getElementById(elId);
+        if (el) el.innerText = left;
+        if (left <= 0 && !fired) {
+          fired = true;
+          clearInterval(subTimerInterval);
+          subTimerInterval = null;
+          subTimerKey = null;
+          if (isHost) onExpire();
+        }
+      }, 500);
+    }
+
+    function clearSubTimer() {
+      if (subTimerInterval) { clearInterval(subTimerInterval); subTimerInterval = null; }
+      subTimerKey = null;
+    }
+
+    // ===== 聊天系統 =====
+    let chatDrafts = {}; // 暫存各聊天輸入框目前打到一半的文字，避免其他玩家的動作觸發重繪時把字吃掉
+
+    window.onChatDraftInput = function(key, val) { chatDrafts[key] = val; };
+
+    function restoreChatDrafts() {
+      Object.keys(chatDrafts).forEach(key => {
+        let el = document.getElementById('draft-' + key);
+        if (el && chatDrafts[key]) el.value = chatDrafts[key];
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    }
+
+    function renderChatBox(title, boxCls, messagesArr, inputHtml) {
+      let log = "";
+      if (messagesArr && messagesArr.length) {
+        messagesArr.forEach(m => { log += `<div class="chat-msg"><span class="who">${escapeHtml(m.name || '???')}：</span>${escapeHtml(m.text || '')}</div>`; });
+      } else {
+        log = `<div class="chat-empty">目前還沒有訊息</div>`;
+      }
+      return `<div class="chat-box ${boxCls || ''}"><h4>${title}</h4><div class="chat-log">${log}</div>${inputHtml || ''}</div>`;
+    }
+
+    function chatInputRow(key, placeholder, onSend) {
+      return `<div class="chat-input-row">
+        <input type="text" id="draft-${key}" placeholder="${placeholder}" maxlength="200" oninput="onChatDraftInput('${key}', this.value)" onkeydown="if(event.key==='Enter'){${onSend}}">
+        <button class="btn-gold" onclick="${onSend}">送出</button>
+      </div>`;
+    }
+
+    function afterlifeChatFragment(roomData) {
+      let msgs = roomData.afterlifeChat ? Object.values(roomData.afterlifeChat).sort((a, b) => a.ts - b.ts) : [];
+      return renderChatBox('👻 亡魂／觀眾聊天室（活人看不到）', 'afterlife-box', msgs, chatInputRow('afterlife', '跟其他亡魂／觀眾聊聊...', "sendAfterlifeMsg()"));
+    }
+
+    function myName() {
+      let rd = latestRoomData;
+      return (rd && rd.players && rd.players[myPlayerId]) ? rd.players[myPlayerId].name : '玩家';
+    }
+
+    // 發言回合：每人限一則
+    window.sendDiscussMsg = function() {
+      if (isSpectator) return;
+      let rd = latestRoomData || {};
+      if (rd.discussMessages && rd.discussMessages[myPlayerId]) return alert("這回合你已經發言過了。");
+      let el = document.getElementById('draft-discuss');
+      let text = el ? el.value.trim() : '';
+      if (!text) return alert("請輸入內容");
+      chatDrafts['discuss'] = '';
+      set(ref(db, `rooms/${currentRoomId}/discussMessages/${myPlayerId}`), { name: myName(), text: text, ts: Date.now() })
+        .catch(err => alert("發送失敗，請再試一次：" + err.message));
+    };
+
+    // 各身分夜間專屬聊天室：次數不限
+    window.sendRoleChatMsg = function(role) {
+      if (isSpectator || myRole !== role) return;
+      let el = document.getElementById('draft-rolechat');
+      let text = el ? el.value.trim() : '';
+      if (!text) return;
+      chatDrafts['rolechat'] = '';
+      push(ref(db, `rooms/${currentRoomId}/roleChat/${role}`), { name: myName(), text: text, ts: Date.now() })
+        .catch(err => alert("發送失敗，請再試一次：" + err.message));
+    };
+
+    // 死者／觀眾聊天室：次數不限，活人看不到
+    window.sendAfterlifeMsg = function() {
+      let rd = latestRoomData || {};
+      let amDead = !isSpectator && rd.players && rd.players[myPlayerId] && !rd.players[myPlayerId].isAlive;
+      if (!isSpectator && !amDead) return;
+      let el = document.getElementById('draft-afterlife');
+      let text = el ? el.value.trim() : '';
+      if (!text) return;
+      chatDrafts['afterlife'] = '';
+      push(ref(db, `rooms/${currentRoomId}/afterlifeChat`), { name: myName() + (isSpectator ? '（觀眾）' : '（亡魂）'), text: text, ts: Date.now() })
+        .catch(err => alert("發送失敗，請再試一次：" + err.message));
+    };
+
+    // 遺言：僅本次被放逐者可留言一次
+    window.sendLastWords = function() {
+      let rd = latestRoomData || {};
+      if (rd.dayEliminatedId !== myPlayerId) return;
+      if (rd.lastWordsLog && rd.lastWordsLog.some(e => e.id === myPlayerId && e.round === rd.round)) return;
+      let el = document.getElementById('draft-lastwords');
+      let text = el ? el.value.trim() : '';
+      if (!text) return alert("請輸入遺言內容");
+      chatDrafts['lastwords'] = '';
+      let entry = { id: myPlayerId, name: myName(), text: text, round: rd.round || 1 };
+      let newLog = [...(Array.isArray(rd.lastWordsLog) ? rd.lastWordsLog : []), entry];
+      set(ref(db, `rooms/${currentRoomId}/lastWordsLog`), newLog)
+        .catch(err => alert("送出失敗，請再試一次：" + err.message));
+    };
+
     function checkAgreedTarget(aliveRolePlayers, votesObj) {
       if (aliveRolePlayers.length === 0) return 'NO_ALIVE';
       if (!votesObj) return null;
@@ -441,12 +605,21 @@
         round: round,
         wolfVotes: null,
         wolfLocked: null,
+        wolfEndTime: Date.now() + 30000,
         policeVotes: null,
         policeResult: null,
+        policeEndTime: null,
         doctorTarget: null,
+        doctorEndTime: null,
         witchAction: null,
+        witchEndTime: null,
         killedByWolf: null,
         lastNightDeaths: null,
+        lastNightDeathCauses: null,
+        nightEndConfirmed: null,
+        discussMessages: null,
+        discussNext: null,
+        discussEndTime: null,
         dayVotes: null,
         dayConfirmed: null,
         dayResultText: null,
@@ -475,6 +648,7 @@
         if (isHost) document.getElementById('host-controls').classList.remove('hidden');
 
         document.getElementById('home-area').classList.add('hidden');
+        document.getElementById('leave-btn').classList.remove('hidden');
         document.getElementById('room-info-bar').innerText = `房間代碼：${currentRoomId}  ·  上限 ${maxPlayersLimit} 人`;
 
         let activePlayers = [];
@@ -501,7 +675,8 @@
           for (let i = 0; i < maxPlayersLimit; i++) {
             if (i < activePlayers.length) {
               let p = activePlayers[i];
-              playersListHtml += `<div class="player-slot">${i + 1}. 👤 ${p.name} ${p.id === roomData.hostId ? '👑' : ''}</div>`;
+              let kickBtn = (isHost && p.id !== myPlayerId) ? `<button class="kick-btn" onclick="kickPlayer('${p.id}')">踢出</button>` : '';
+              playersListHtml += `<div class="player-slot" style="display:flex; justify-content:space-between; align-items:center;"><span>${i + 1}. 👤 ${p.name} ${p.id === roomData.hostId ? '👑' : ''}</span>${kickBtn}</div>`;
             } else {
               playersListHtml += `<div class="player-slot slot-empty">${i + 1}. (空位)</div>`;
             }
@@ -509,7 +684,10 @@
           document.getElementById('player-slots').innerHTML = playersListHtml;
 
           let spectatorsListHtml = "";
-          spectators.forEach(p => { spectatorsListHtml += `👁️ ${p.name}<br>`; });
+          spectators.forEach(p => {
+            let kickBtn = (isHost && p.id !== myPlayerId) ? `<button class="kick-btn" onclick="kickPlayer('${p.id}')">踢出</button>` : '';
+            spectatorsListHtml += `<div style="display:flex; justify-content:space-between; align-items:center; max-width:260px; margin:0 auto 4px;"><span>👁️ ${p.name}</span>${kickBtn}</div>`;
+          });
           document.getElementById('spectator-list').innerHTML = spectatorsListHtml || '<span class="slot-empty">目前無觀眾</span>';
 
           if (isSpectator) {
@@ -553,6 +731,10 @@
         hunterFinalizing = false;
         lastHunterShotId = null;
       }
+      if (roomData.phase !== lastRenderedPhase) {
+        clearSubTimer();
+      }
+      lastRenderedPhase = roomData.phase;
 
       // --- 0. 遊戲結束階段（觀眾也可見，所以放在 spectator return 之前） ---
       if (roomData.phase === 'GAME_OVER') {
@@ -579,6 +761,9 @@
           return `<div class="list-item ${deadCls}">${st} <b class="pname">${p.name}</b> <span class="pill" style="${rolePillStyle(p.role)}">${info.icon || ''} ${p.role}</span></div>`;
         }).join('');
         let rosterBlock = `<div class="in-game-list"><h4>🎭 身分大公開</h4>${rosterHtml}</div>`;
+        let lastWordsBlock = (roomData.lastWordsLog && roomData.lastWordsLog.length)
+          ? renderChatBox('🕯️ 全場遺言回顧', '', roomData.lastWordsLog, '')
+          : '';
         gameContent.innerHTML = baseHTML + `
           <div class="card gameover-box">
             <div class="winner-sub">END OF THE HUNT</div>
@@ -586,6 +771,7 @@
             <p style="color:var(--bone-dim); margin:6px 0 12px;">${isWolfWin ? '所有平民已被獵殺殆盡，黑夜吞噬了村莊。' : '狼人全數伏誅，村莊迎來了黎明。'}</p>
             ${recapHtml ? `<div class="death-recap">${recapHtml}</div>` : ''}
             ${rosterBlock}
+            ${lastWordsBlock}
           </div>`;
         if (isHost) {
           hostControls.classList.remove('hidden');
@@ -624,6 +810,7 @@
           html += `<h2>🏹 獵人最後行動</h2><p style="font-size:20px; margin:20px 0;"><b>${hunterName}</b> 正在決定是否開槍...</p>`;
         }
         gameContent.innerHTML = html;
+        restoreChatDrafts();
 
         if (isHost) {
           hostControls.classList.remove('hidden');
@@ -635,7 +822,20 @@
       }
 
       if (isSpectator) {
-        gameContent.innerHTML = baseHTML + `<div class="card" style="background:#2a2a36;">👁️ 您目前為觀眾席，無法參與遊戲操作<br>目前階段：${getPhaseName(roomData.phase)}</div>`;
+        let html = baseHTML + `<div class="card" style="background:#2a2a36;">👁️ 您目前為觀眾席，無法參與遊戲操作<br>目前階段：${getPhaseName(roomData.phase)}</div>`;
+
+        if (roomData.phase === 'DAY_DISCUSS') {
+          let msgs = roomData.discussMessages ? Object.values(roomData.discussMessages).sort((a, b) => a.ts - b.ts) : [];
+          html += renderChatBox('💬 發言紀錄', '', msgs, '');
+        }
+        if (roomData.lastWordsLog && roomData.lastWordsLog.length) {
+          html += renderChatBox('🕯️ 遺言紀錄', '', roomData.lastWordsLog, '');
+        }
+        let afterlifeMsgs = roomData.afterlifeChat ? Object.values(roomData.afterlifeChat).sort((a, b) => a.ts - b.ts) : [];
+        html += renderChatBox('👻 亡魂／觀眾聊天室（活人看不到）', 'afterlife-box', afterlifeMsgs, chatInputRow('afterlife', '跟其他亡魂／觀眾聊聊...', "sendAfterlifeMsg()"));
+
+        gameContent.innerHTML = html;
+        restoreChatDrafts();
         return;
       }
 
@@ -662,22 +862,53 @@
           hostControls.classList.remove('hidden');
           btnHostNext.innerText = "遊戲開始";
           btnHostNext.disabled = false;
-          btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), { phase: 'DAY_DISCUSS' });
+          btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), {
+            phase: 'DAY_DISCUSS',
+            discussNext: 'NIGHT_WOLF',
+            discussEndTime: Date.now() + 90000,
+            discussMessages: null
+          });
         }
       }
       // --- 2. 白天發言階段 ---
       else if (roomData.phase === 'DAY_DISCUSS') {
-        gameContent.innerHTML = baseHTML + `
-          <h2>🗣️ 白天 · 發言時間</h2>
-          <p style="font-size:20px; color:var(--gold); font-weight:bold; margin: 20px 0;">請大家輪流發言，夜晚即將來臨</p>
-        `;
+        let isDeadSelf = roomData.players[myPlayerId] && !roomData.players[myPlayerId].isAlive;
+        let remaining = roomData.discussEndTime ? Math.max(0, Math.ceil((roomData.discussEndTime - Date.now()) / 1000)) : 90;
+        let msgs = roomData.discussMessages ? Object.values(roomData.discussMessages).sort((a, b) => a.ts - b.ts) : [];
+        let iSpoke = roomData.discussMessages && roomData.discussMessages[myPlayerId];
+
+        let html = baseHTML + `
+          <h2>🗣️ 白天 · 發言時間 (第 ${roomData.round || 1} 天)</h2>
+          <p id="discuss-timer">⏳ 剩餘 <span id="discuss-timer-val">${remaining}</span> 秒</p>`;
+
+        let inputHtml = "";
+        if (isSpectator) {
+          inputHtml = `<p class="chat-empty">觀眾只能旁觀發言，無法插話。</p>`;
+        } else if (isDeadSelf) {
+          inputHtml = `<p class="chat-empty">你已死亡，無法在此發言（可到下方亡魂／觀眾聊天室說話）。</p>`;
+        } else if (iSpoke) {
+          inputHtml = `<p class="chat-empty">✅ 你已經發言過了，安靜等待其他人吧。</p>`;
+        } else {
+          inputHtml = chatInputRow('discuss', '輸入你的發言（限一次）...', "sendDiscussMsg()");
+        }
+        html += renderChatBox('💬 發言紀錄（每人限一則）', '', msgs, inputHtml);
+        if (isDeadSelf) html += afterlifeChatFragment(roomData);
+
+        gameContent.innerHTML = html;
+        restoreChatDrafts();
+
+        if (roomData.discussEndTime) {
+          startSubTimer('discuss-' + roomData.discussEndTime, roomData.discussEndTime, 'discuss-timer-val', () => {
+            advanceFromDiscuss(latestRoomData);
+          });
+        }
+
         if (isHost) {
           hostControls.classList.remove('hidden');
-          btnHostNext.innerText = "天黑請閉眼";
+          let toVote = roomData.discussNext === 'DAY_VOTE';
+          btnHostNext.innerText = toVote ? "🗳️ 提早進入投票" : "🌙 提早天黑（閉眼）";
           btnHostNext.disabled = false;
-          btnHostNext.onclick = () => {
-            update(ref(db, `rooms/${currentRoomId}`), nightResetUpdates(1));
-          };
+          btnHostNext.onclick = () => advanceFromDiscuss(roomData);
         }
       }
       // --- 3. 夜晚：狼人回合 ---
@@ -687,11 +918,13 @@
 
         if (isDead) {
           html += `<h2>👻 你已死亡，請安靜觀戰</h2>`;
+          html += afterlifeChatFragment(roomData);
         } else if (myRole === '狼人') {
           const locked = !!(roomData.wolfLocked && roomData.wolfLocked[myPlayerId]);
           let aliveWolves = activePlayers.filter(p => p.role === '狼人' && p.isAlive);
           let lockedCount = aliveWolves.filter(w => roomData.wolfLocked && roomData.wolfLocked[w.id]).length;
-          html += `<h2>🐺 狼人行動 (第 ${roomData.round || 1} 夜)</h2><p style="color:#e23b3b;">請選擇要殺害的對象，選好後按下「確認鎖定」：</p>`;
+          let wolfRemaining = roomData.wolfEndTime ? Math.max(0, Math.ceil((roomData.wolfEndTime - Date.now()) / 1000)) : 30;
+          html += `<h2>🐺 狼人行動 (第 ${roomData.round || 1} 夜)</h2><p id="wolf-timer">⏳ 剩餘 <span id="wolf-timer-val">${wolfRemaining}</span> 秒</p><p style="color:#e23b3b;">請選擇要殺害的對象，選好後按下「確認鎖定」：</p>`;
           activePlayers.filter(p => p.isAlive && p.role !== '狼人').forEach(p => {
             let voteCount = 0;
             let isMyTarget = false;
@@ -720,10 +953,13 @@
             let label = myVote ? '🔒 確認鎖定目標' : '🔒 確認鎖定（請先選擇目標）';
             html += `<div class="decide-bar"><button class="btn-gold" style="width:92%; font-size:18px; padding:13px;" onclick="confirmWolfLock()">${label}</button></div>`;
           }
+          let wolfChatMsgs = roomData.roleChat && roomData.roleChat.狼人 ? Object.values(roomData.roleChat.狼人).sort((a,b)=>a.ts-b.ts) : [];
+          html += renderChatBox('🐺 狼人密語（僅狼隊看得到，次數不限）', 'role-chat-box', wolfChatMsgs, chatInputRow('rolechat', '跟狼隊友討論...', "sendRoleChatMsg('狼人')"));
         } else {
           html += `<h2>🌙 夜晚降臨 (第 ${roomData.round || 1} 夜)</h2><p style="font-size:22px; margin: 30px 0;">狼人行動中，請閉眼稍候...</p>`;
         }
         gameContent.innerHTML = html;
+        restoreChatDrafts();
 
         if (isHost) {
           hostControls.classList.remove('hidden');
@@ -739,15 +975,22 @@
                 clearInterval(wolfTimerInterval); wolfTimerInterval = null;
                 return;
               }
+              let el = document.getElementById('wolf-timer-val');
+              if (el && rd.wolfEndTime) el.innerText = Math.max(0, Math.ceil((rd.wolfEndTime - Date.now()) / 1000));
               let aw = Object.entries(rd.players || {})
                 .filter(([id, p]) => !p.isSpectator && p.isAlive && p.role === '狼人')
                 .map(([id]) => id);
               if (aw.length === 0) return;
               let allLocked = aw.every(id => rd.wolfLocked && rd.wolfLocked[id]);
               let agreed = checkAgreedTarget(aw, rd.wolfVotes);
+              let timeUp = rd.wolfEndTime && Date.now() >= rd.wolfEndTime;
               if (allLocked && agreed && agreed !== 'NO_ALIVE' && !wolfAutoAdvancing) {
                 wolfAutoAdvancing = true;
                 advanceFromWolf(rd, agreed);
+              } else if (timeUp && !wolfAutoAdvancing) {
+                wolfAutoAdvancing = true;
+                // 時間到：若已有一致鎖定目標就照殺，否則視為無人被殺
+                advanceFromWolf(rd, (agreed && agreed !== 'NO_ALIVE') ? agreed : null);
               }
             }, 500);
           }
@@ -763,15 +1006,23 @@
 
         if (isDead) {
           html += `<h2>👻 警察回合 (你已死亡)</h2>`;
+          html += afterlifeChatFragment(roomData);
         } else if (myRole === '警察') {
           if (roomData.policeResult) {
+            if (roomData.policeResult === 'none') {
+              html += `<div style="background:linear-gradient(135deg,#7f8c8d,#4d5656); padding:15px; border-radius:8px; margin-top:20px;">
+                          <h3>👮 本回合未進行調查</h3>
+                       </div>`;
+            } else {
             let target = activePlayers.find(p => p.id === roomData.policeResult);
             html += `<div style="background:linear-gradient(135deg,#27ae60,#145a32); padding:15px; border-radius:8px; margin-top:20px;">
                         <h3>🔍 調查結果</h3>
                         <p style="font-size:22px;"><b>${target ? target.name : '未知'}</b> 的身分是：<b>${target ? target.role : '未知'}</b></p>
                      </div>`;
+            }
           } else {
-            html += `<h2>👮 警察行動</h2><p style="color:#5a9bd6;">請選擇你要調查的對象：</p>`;
+            let policeRemaining = roomData.policeEndTime ? Math.max(0, Math.ceil((roomData.policeEndTime - Date.now()) / 1000)) : 30;
+            html += `<h2>👮 警察行動</h2><p id="police-timer">⏳ 剩餘 <span id="police-timer-val">${policeRemaining}</span> 秒</p><p style="color:#5a9bd6;">請選擇你要調查的對象：</p>`;
             let alivePolice = activePlayers.filter(p => p.role === '警察' && p.isAlive);
 
             activePlayers.filter(p => p.isAlive && p.role !== '警察').forEach(p => {
@@ -795,15 +1046,24 @@
             if (agreedTarget && agreedTarget !== 'NO_ALIVE') {
               html += `<button class="btn-success" style="width:90%; font-size:20px; padding:15px; margin-top:15px;" onclick="confirmPolice('${agreedTarget}')">✅ 確認調查目標</button>`;
             }
+            let policeChatMsgs = roomData.roleChat && roomData.roleChat.警察 ? Object.values(roomData.roleChat.警察).sort((a,b)=>a.ts-b.ts) : [];
+            html += renderChatBox('👮 警察密語（次數不限）', 'role-chat-box', policeChatMsgs, chatInputRow('rolechat', '跟警隊討論...', "sendRoleChatMsg('警察')"));
           }
         } else {
           html += `<h2>👮 警察行動中...</h2><p style="font-size:22px;">夜晚中，請稍候...</p>`;
         }
         gameContent.innerHTML = html;
+        restoreChatDrafts();
 
         if (isHost) {
           hostControls.classList.remove('hidden');
           let alivePolice = activePlayers.filter(p => p.role === '警察' && p.isAlive);
+
+          if (!roomData.policeResult && roomData.policeEndTime) {
+            startSubTimer('police-' + roomData.policeEndTime, roomData.policeEndTime, 'police-timer-val', () => {
+              set(ref(db, `rooms/${currentRoomId}/policeResult`), 'none').catch(() => {});
+            });
+          }
 
           if (alivePolice.length === 0 || roomData.policeResult) {
             btnHostNext.innerText = "下一步";
@@ -812,8 +1072,10 @@
               let updates = {};
               if (hasAliveRole(roomData, '醫生')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_DOCTOR';
+                updates[`rooms/${currentRoomId}/doctorEndTime`] = Date.now() + 30000;
               } else if (hasAliveRole(roomData, '女巫')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
+                updates[`rooms/${currentRoomId}/witchEndTime`] = Date.now() + 30000;
               } else {
                 calculateNightEndViaData(roomData, updates);
                 update(ref(db), updates);
@@ -822,8 +1084,10 @@
               update(ref(db), updates);
             };
           } else {
-            btnHostNext.innerText = "等待警察確認調查...";
-            btnHostNext.disabled = true;
+            btnHostNext.innerText = "⚡ 強制跳過（警察不確認）";
+            btnHostNext.disabled = false;
+            btnHostNext.onclick = () => set(ref(db, `rooms/${currentRoomId}/policeResult`), 'none')
+              .catch(err => alert("跳過失敗，請再試一次：" + err.message));
           }
         }
       }
@@ -834,6 +1098,7 @@
 
         if (isDead) {
           html += `<h2>👻 醫生回合 (你已死亡)</h2>`;
+          html += afterlifeChatFragment(roomData);
         } else if (myRole === '醫生') {
           let needsLeft = (roomData.doctorState && typeof roomData.doctorState.needsLeft === 'number') ? roomData.doctorState.needsLeft : 2;
           if (roomData.doctorTarget) {
@@ -848,7 +1113,8 @@
                        </div>`;
             }
           } else {
-            html += `<h2>🩺 醫生行動</h2>`;
+            let doctorRemaining = roomData.doctorEndTime ? Math.max(0, Math.ceil((roomData.doctorEndTime - Date.now()) / 1000)) : 30;
+            html += `<h2>🩺 醫生行動</h2><p id="doctor-timer">⏳ 剩餘 <span id="doctor-timer-val">${doctorRemaining}</span> 秒</p>`;
             html += `<p style="color:#5fd68a;">剩餘急救針：<b>${needsLeft} / 2</b>（每局共 2 針，每晚最多 1 針）</p>`;
             if (needsLeft <= 0) {
               html += `<p style="color:#e23b3b;">⚠️ 你的急救針已用完，今晚無法施打。</p>`;
@@ -860,14 +1126,23 @@
             }
             html += `<div class="decide-bar" style="margin-top:10px;"><button class="btn-ghost" style="width:92%; font-size:16px; padding:11px;" onclick="doctorSkip()">⏭️ 今晚不施打</button></div>`;
           }
+          let doctorChatMsgs = roomData.roleChat && roomData.roleChat.醫生 ? Object.values(roomData.roleChat.醫生).sort((a,b)=>a.ts-b.ts) : [];
+          html += renderChatBox('🩺 醫生密語（次數不限）', 'role-chat-box', doctorChatMsgs, chatInputRow('rolechat', '跟醫療隊討論...', "sendRoleChatMsg('醫生')"));
         } else {
           html += `<h2>🩺 醫生行動中...</h2><p style="font-size:22px;">請繼續閉眼稍候...</p>`;
         }
         gameContent.innerHTML = html;
+        restoreChatDrafts();
 
         if (isHost) {
           hostControls.classList.remove('hidden');
           let aliveDoctor = activePlayers.filter(p => p.role === '醫生' && p.isAlive);
+
+          if (!roomData.doctorTarget && roomData.doctorEndTime) {
+            startSubTimer('doctor-' + roomData.doctorEndTime, roomData.doctorEndTime, 'doctor-timer-val', () => {
+              set(ref(db, `rooms/${currentRoomId}/doctorTarget`), 'none').catch(() => {});
+            });
+          }
 
           if (aliveDoctor.length === 0 || roomData.doctorTarget) {
             btnHostNext.innerText = "下一步";
@@ -876,6 +1151,7 @@
               let updates = {};
               if (hasAliveRole(roomData, '女巫')) {
                 updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
+                updates[`rooms/${currentRoomId}/witchEndTime`] = Date.now() + 30000;
               } else {
                 calculateNightEndViaData(roomData, updates);
                 update(ref(db), updates);
@@ -897,6 +1173,7 @@
 
         if (isDead) {
           html += `<h2>👻 女巫回合 (你已死亡)</h2>`;
+          html += afterlifeChatFragment(roomData);
         } else if (myRole === '女巫') {
           if (roomData.witchAction) {
             let actionText = roomData.witchAction.type === 'heal' ? '使用了解藥 💉' :
@@ -905,8 +1182,10 @@
                        <h3>🧙‍♀️ 今晚行動完畢</h3><p>${actionText}</p>
                      </div>`;
           } else {
+            let witchRemaining = roomData.witchEndTime ? Math.max(0, Math.ceil((roomData.witchEndTime - Date.now()) / 1000)) : 30;
             html += `<div style="background:linear-gradient(135deg,#8e44ad,#512e5f); padding:15px; border-radius:8px;">
-                       <h3>🧙‍♀️ 女巫行動</h3>`;
+                       <h3>🧙‍♀️ 女巫行動</h3>
+                       <p id="witch-timer">⏳ 剩餘 <span id="witch-timer-val">${witchRemaining}</span> 秒</p>`;
 
             if (roomData.witchState?.hasHeal && roomData.killedByWolf) {
               let victim = activePlayers.find(p => p.id === roomData.killedByWolf);
@@ -927,14 +1206,23 @@
 
             html += `<button class="btn-secondary target-btn" onclick="witchAction('skip', null)">⏭️ 什麼都不做</button></div>`;
           }
+          let witchChatMsgs = roomData.roleChat && roomData.roleChat.女巫 ? Object.values(roomData.roleChat.女巫).sort((a,b)=>a.ts-b.ts) : [];
+          html += renderChatBox('🧙‍♀️ 女巫密語（次數不限）', 'role-chat-box', witchChatMsgs, chatInputRow('rolechat', '跟女巫團隊討論...', "sendRoleChatMsg('女巫')"));
         } else {
           html += `<h2>🧙‍♀️ 女巫行動中...</h2><p style="font-size:22px;">請繼續閉眼稍候...</p>`;
         }
         gameContent.innerHTML = html;
+        restoreChatDrafts();
 
         if (isHost) {
           hostControls.classList.remove('hidden');
           let aliveWitch = activePlayers.filter(p => p.role === '女巫' && p.isAlive);
+
+          if (!roomData.witchAction && roomData.witchEndTime) {
+            startSubTimer('witch-' + roomData.witchEndTime, roomData.witchEndTime, 'witch-timer-val', () => {
+              set(ref(db, `rooms/${currentRoomId}/witchAction`), { type: 'skip', target: null }).catch(() => {});
+            });
+          }
 
           if (aliveWitch.length === 0 || roomData.witchAction) {
             btnHostNext.innerText = "下一步 (天亮結算)";
@@ -953,14 +1241,19 @@
       }
       // --- 6. 天亮結算階段 ---
       else if (roomData.phase === 'NIGHT_END') {
-        let deadNames = [];
+        let deathLines = [];
         if (roomData.lastNightDeaths && roomData.lastNightDeaths.length > 0) {
-          deadNames = roomData.lastNightDeaths.map(id => {
+          const causeText = { wolf: '被狼人殺了 🐺', poison: '被女巫毒死 🧪' };
+          roomData.lastNightDeaths.forEach(id => {
             let p = roomData.players[id];
-            return p ? p.name : '未知';
+            let name = p ? p.name : '未知';
+            let cause = roomData.lastNightDeathCauses && roomData.lastNightDeathCauses[id];
+            deathLines.push(`<b>${name}</b> ${causeText[cause] || '不幸身亡'}`);
           });
         }
-        let deathText = deadNames.length > 0 ? deadNames.join("、") : "無人 (平安夜)";
+        let deathHtml = deathLines.length > 0
+          ? deathLines.map(t => `<div style="font-size:24px; font-weight:bold; color:#e23b3b; margin:6px 0;">${t}</div>`).join('')
+          : `<div style="font-size:24px; font-weight:bold; color:#7be0a3; margin:6px 0;">昨晚是平安夜，無人死亡</div>`;
         let hunterRecap = "";
         if (roomData.hunterShotLog && Array.isArray(roomData.hunterShotLog)) {
           let kills = roomData.hunterShotLog.filter(e => e && e.killed && e.target)
@@ -968,25 +1261,42 @@
           if (kills.length) hunterRecap = `<p style="margin-top:10px;">🏹 獵人開槍帶走了：<b style="color:#e67e22;">${kills.join('、')}</b></p>`;
         }
 
+        const confirmedSet = roomData.nightEndConfirmed || {};
+        const nonSpecIds = Object.entries(roomData.players || {}).filter(([id,p]) => !p.isSpectator).map(([id]) => id);
+        const confirmedCount = nonSpecIds.filter(id => confirmedSet[id]).length;
+        const iConfirmed = !!confirmedSet[myPlayerId];
+
         gameContent.innerHTML = baseHTML + `
           <h2>🌅 天亮了</h2>
-          <p style="font-size:20px; margin:20px 0;">昨晚被淘汰的玩家是：<br>
-          <span style="color:#e23b3b; font-size:32px; font-weight:bold; display:inline-block; margin-top:10px;">${deathText}</span></p>
+          <p style="font-size:16px; color:var(--bone-dim); margin:14px 0 8px;">昨晚發生的事：</p>
+          ${deathHtml}
           ${hunterRecap}
+          <div class="confirm-ok-banner">已確認：${confirmedCount} / ${nonSpecIds.length} 人</div>
+          ${isSpectator ? '' : (iConfirmed
+            ? `<p style="color:#7be0a3;">✅ 你已確認，等待其他人...</p>`
+            : `<div class="decide-bar"><button class="btn-gold" style="width:92%; font-size:19px; padding:14px;" onclick="confirmNightEnd()">✅ 我知道了</button></div>`)}
         `;
 
         if (isHost) {
           hostControls.classList.remove('hidden');
-          btnHostNext.innerText = "進入白天投票環節";
+          if (subTimerKey !== 'nightend-' + (roomData.round || 1)) {
+            clearSubTimer();
+            subTimerKey = 'nightend-' + (roomData.round || 1);
+            subTimerInterval = setInterval(() => {
+              let rd = latestRoomData;
+              if (!rd || rd.phase !== 'NIGHT_END') { clearInterval(subTimerInterval); subTimerInterval = null; subTimerKey = null; return; }
+              let ids = Object.entries(rd.players || {}).filter(([id, p]) => !p.isSpectator).map(([id]) => id);
+              let confirmed = rd.nightEndConfirmed || {};
+              let allDone = ids.length > 0 && ids.every(id => confirmed[id]);
+              if (allDone) {
+                clearInterval(subTimerInterval); subTimerInterval = null; subTimerKey = null;
+                advanceFromNightEnd(rd);
+              }
+            }, 500);
+          }
+          btnHostNext.innerText = "⚡ 提早進入白天討論";
           btnHostNext.disabled = false;
-          btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), {
-            phase: 'DAY_VOTE',
-            voteEndTime: Date.now() + 30000,
-            dayVotes: null,
-            dayConfirmed: null,
-            dayResultText: null,
-            dayEliminatedId: null
-          });
+          btnHostNext.onclick = () => advanceFromNightEnd(roomData);
         }
       }
       // --- 7. 白天投票放逐階段 ---
@@ -1009,6 +1319,7 @@
 
         if (isDead) {
           html += `<p style="color:var(--muted);">你已死亡，無法投票</p>`;
+          html += afterlifeChatFragment(roomData);
         } else if (!roomData.dayResultText) {
           if (iConfirmed) {
             let myTarget = roomData.dayVotes && roomData.dayVotes[myPlayerId];
@@ -1045,6 +1356,7 @@
         }
 
         gameContent.innerHTML = html;
+        restoreChatDrafts();
 
         // 倒數與「全員已決定」監聽：每個裝置都顯示倒數；房主在「時間到」或「全員已決定」時結算。
         // 結算改在 interval 內用最新 latestRoomData 判斷，避免 render 當下用未同步的舊快照導致按鈕卡住。
@@ -1123,13 +1435,30 @@
             .map(e => roomData.players[e.target] ? roomData.players[e.target].name : '未知');
           if (kills.length) hunterRecap = `<p style="margin-top:10px; color:#e67e22;">🏹 獵人開槍帶走了：<b>${kills.join('、')}</b></p>`;
         }
-        gameContent.innerHTML = baseHTML + `
+        let alreadySaid = roomData.lastWordsLog && roomData.lastWordsLog.some(e => e.id === myPlayerId && e.round === (roomData.round || 1));
+        let isMeEliminated = roomData.dayEliminatedId === myPlayerId;
+
+        let html = baseHTML + `
           <h2>🕯️ 遺言時間</h2>
           <p style="font-size:20px; margin: 20px 0; line-height:1.8;">
             <b style="color:#e23b3b; font-size:28px;">${eliminated ? eliminated.name : '該玩家'}</b> 已被放逐<br>
             請發表最後遺言
           </p>
           ${hunterRecap}`;
+
+        let lwInput = "";
+        if (isMeEliminated && !alreadySaid) {
+          lwInput = chatInputRow('lastwords', '輸入你的遺言（限一次）...', "sendLastWords()");
+        } else if (isMeEliminated) {
+          lwInput = `<p class="chat-empty">✅ 你已經留下遺言了。</p>`;
+        }
+        html += renderChatBox('🕯️ 遺言紀錄', '', roomData.lastWordsLog || [], lwInput);
+
+        let isDeadNotSpec = !isSpectator && roomData.players[myPlayerId] && !roomData.players[myPlayerId].isAlive;
+        if (isDeadNotSpec) html += afterlifeChatFragment(roomData);
+
+        gameContent.innerHTML = html;
+        restoreChatDrafts();
 
         if (isHost) {
           hostControls.classList.remove('hidden');
@@ -1139,6 +1468,42 @@
           btnHostNext.onclick = () => update(ref(db, `rooms/${currentRoomId}`), nightResetUpdates(nextRound));
         }
       }
+    }
+
+    // 發言時間推進：依 discussNext 決定去投票還是去天黑
+    function advanceFromDiscuss(roomData) {
+      if (!isHost || !roomData) return;
+      if (roomData.discussNext === 'DAY_VOTE') {
+        update(ref(db, `rooms/${currentRoomId}`), {
+          phase: 'DAY_VOTE',
+          voteEndTime: Date.now() + 60000,
+          dayVotes: null,
+          dayConfirmed: null,
+          dayResultText: null,
+          dayEliminatedId: null
+        }).catch(err => alert("推進失敗，請再試一次：" + err.message));
+      } else {
+        update(ref(db, `rooms/${currentRoomId}`), nightResetUpdates(roomData.round || 1))
+          .catch(err => alert("推進失敗，請再試一次：" + err.message));
+      }
+    }
+
+    window.confirmNightEnd = function() {
+      if (isSpectator) return;
+      set(ref(db, `rooms/${currentRoomId}/nightEndConfirmed/${myPlayerId}`), true)
+        .catch(err => alert("確認失敗，請再試一次：" + err.message));
+    };
+
+    // 天亮結算推進到白天發言（下一步固定進入討論，再由討論導向投票）
+    function advanceFromNightEnd(roomData) {
+      if (!isHost || !roomData) return;
+      update(ref(db, `rooms/${currentRoomId}`), {
+        phase: 'DAY_DISCUSS',
+        discussNext: 'DAY_VOTE',
+        discussEndTime: Date.now() + 90000,
+        discussMessages: null,
+        nightEndConfirmed: null
+      }).catch(err => alert("推進失敗，請再試一次：" + err.message));
     }
 
     // 狼人回合推進：targetId 有值則記錄擊殺目標，null 表示強制無人被殺
@@ -1151,10 +1516,13 @@
 
       if (hasAliveRole(roomData, '警察')) {
         updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_POLICE';
+        updates[`rooms/${currentRoomId}/policeEndTime`] = Date.now() + 30000;
       } else if (hasAliveRole(roomData, '醫生')) {
         updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_DOCTOR';
+        updates[`rooms/${currentRoomId}/doctorEndTime`] = Date.now() + 30000;
       } else if (hasAliveRole(roomData, '女巫')) {
         updates[`rooms/${currentRoomId}/phase`] = 'NIGHT_WITCH';
+        updates[`rooms/${currentRoomId}/witchEndTime`] = Date.now() + 30000;
       } else {
         calculateNightEndViaData(effectiveRoomData, updates);
         update(ref(db), updates).catch(err => {
@@ -1173,6 +1541,7 @@
 
     function calculateNightEndViaData(roomData, updates) {
       let deaths = [];
+      let causes = {};
       let killedByWolf = roomData.killedByWolf;
       let doctorTarget = roomData.doctorTarget;
       let witchAct = roomData.witchAction;
@@ -1183,6 +1552,7 @@
 
         if (!isSavedByDoctor && !isSavedByWitch) {
           deaths.push(killedByWolf);
+          causes[killedByWolf] = 'wolf';
         }
       }
 
@@ -1190,12 +1560,14 @@
         if (!deaths.includes(witchAct.target)) {
           deaths.push(witchAct.target);
         }
+        causes[witchAct.target] = 'poison';
       }
 
       deaths.forEach(id => {
         updates[`rooms/${currentRoomId}/players/${id}/isAlive`] = false;
       });
       updates[`rooms/${currentRoomId}/lastNightDeaths`] = deaths.length > 0 ? deaths : null;
+      updates[`rooms/${currentRoomId}/lastNightDeathCauses`] = deaths.length > 0 ? causes : null;
 
       // 獵人被淘汰 → 進入獵人開槍階段（勝負延後到開槍後才判定）
       let deadHunters = deaths.filter(id => roomData.players[id] && roomData.players[id].role === '獵人');
@@ -1378,11 +1750,13 @@
 
     window.witchAction = function(type, targetId) {
       if (isSpectator) return;
+      let rd = latestRoomData || {};
+      if (rd.witchAction) return; // 已行動過，避免重複送出
       let updates = {};
       updates[`rooms/${currentRoomId}/witchAction`] = { type: type, target: targetId };
       if (type === 'heal') updates[`rooms/${currentRoomId}/witchState/hasHeal`] = false;
       if (type === 'poison') updates[`rooms/${currentRoomId}/witchState/hasPoison`] = false;
-      update(ref(db), updates);
+      update(ref(db), updates).catch(err => alert("女巫行動失敗，請再試一次：" + err.message));
     };
 
     // 獵人開槍：useGun=true 隨機帶走一名存活玩家；false 則不開槍
@@ -1551,7 +1925,19 @@
           [`rooms/${currentRoomId}/hunterShotId`]: null,
           [`rooms/${currentRoomId}/hunterShotLog`]: null,
           [`rooms/${currentRoomId}/hunterContext`]: null,
-          [`rooms/${currentRoomId}/pendingHunters`]: null
+          [`rooms/${currentRoomId}/pendingHunters`]: null,
+          [`rooms/${currentRoomId}/lastNightDeathCauses`]: null,
+          [`rooms/${currentRoomId}/nightEndConfirmed`]: null,
+          [`rooms/${currentRoomId}/discussMessages`]: null,
+          [`rooms/${currentRoomId}/discussNext`]: null,
+          [`rooms/${currentRoomId}/discussEndTime`]: null,
+          [`rooms/${currentRoomId}/wolfEndTime`]: null,
+          [`rooms/${currentRoomId}/policeEndTime`]: null,
+          [`rooms/${currentRoomId}/doctorEndTime`]: null,
+          [`rooms/${currentRoomId}/witchEndTime`]: null,
+          [`rooms/${currentRoomId}/roleChat`]: null,
+          [`rooms/${currentRoomId}/afterlifeChat`]: null,
+          [`rooms/${currentRoomId}/lastWordsLog`]: null
         };
         for (let id in players) {
           updates[`rooms/${currentRoomId}/players/${id}/role`] = players[id].isSpectator ? "觀眾" : "未分配";
@@ -1573,6 +1959,7 @@
     <button class="btn-secondary" onclick="restartGame()">🔄 重新開始</button>
     <button class="btn-danger" onclick="closeRoom()">❌ 關閉房間</button>
   </div>
+  <button id="leave-btn" class="btn-ghost hidden" onclick="leaveRoom()">🚪 離開房間</button>
 
   <h1 class="game-title">死或活</h1>
   <div class="game-sub">DEAD OR ALIFE</div>
